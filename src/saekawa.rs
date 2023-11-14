@@ -127,30 +127,44 @@ unsafe fn winhttpwritedata_hook(
         return orig();
     }
 
-    let import = Import {
-        classes: if CONFIGURATION.general.export_class {
-            Some(ImportClasses {
-                dan: ClassEmblem::try_from(user_data.class_emblem_medal).ok(),
-                emblem: ClassEmblem::try_from(user_data.class_emblem_base).ok(),
-            })
-        } else {
-            None
-        },
-        scores: upsert_req
-            .upsert_user_all
-            .user_playlog_list
-            .into_iter()
-            .filter_map(|playlog| {
-                if let Ok(score) = ImportScore::try_from(playlog) {
-                    if score.difficulty.as_str() == "WORLD'S END" {
-                        return None;
-                    }
-                    Some(score)
-                } else {
-                    None
+    let classes = if CONFIGURATION.general.export_class {
+        Some(ImportClasses {
+            dan: ClassEmblem::try_from(user_data.class_emblem_medal).ok(),
+            emblem: ClassEmblem::try_from(user_data.class_emblem_base).ok(),
+        })
+    } else {
+        None
+    };
+
+    let scores = upsert_req
+        .upsert_user_all
+        .user_playlog_list
+        .into_iter()
+        .filter_map(|playlog| {
+            if let Ok(score) = ImportScore::try_from(playlog) {
+                if score.difficulty.as_str() == "WORLD'S END" {
+                    return None;
                 }
-            })
-            .collect(),
+                Some(score)
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<ImportScore>>();
+
+    if scores.is_empty() {
+        if classes.is_none() {
+            return orig();
+        }
+
+        if classes.clone().is_some_and(|v| v.dan.is_none() && v.emblem.is_none()) {
+            return orig();
+        }
+    }
+
+    let import = Import {
+        classes,
+        scores,
         ..Default::default()
     };
 
