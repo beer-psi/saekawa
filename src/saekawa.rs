@@ -14,12 +14,12 @@ use winapi::{
 };
 
 use crate::{
-    helpers::{call_tachi, read_hinternet_url, read_potentially_deflated_buffer},
+    helpers::{call_tachi, read_hinternet_url, read_potentially_deflated_buffer, self},
     types::{
         game::UpsertUserAllRequest,
         tachi::{ClassEmblem, Import, ImportClasses, ImportScore},
     },
-    CONFIGURATION, TACHI_IMPORT_URL,
+    CONFIGURATION, TACHI_IMPORT_URL, TACHI_STATUS_URL,
 };
 
 type WinHttpWriteDataFunc = unsafe extern "system" fn(HINTERNET, LPCVOID, DWORD, LPDWORD) -> BOOL;
@@ -32,6 +32,13 @@ pub fn hook_init() -> Result<()> {
     if !CONFIGURATION.general.enable {
         return Ok(());
     }
+
+    let resp: serde_json::Value = helpers::request_tachi("GET", TACHI_STATUS_URL.as_str(), None::<()>)?;
+    let user_id = resp["body"]["whoami"]
+        .as_u64()
+        .ok_or(anyhow::anyhow!("Couldn't parse user from Tachi response"))?;
+
+    info!("Logged in to Tachi with userID {user_id}");
 
     let winhttpwritedata = unsafe {
         let addr = get_proc_address("winhttp.dll", "WinHttpWriteData")
@@ -69,16 +76,18 @@ unsafe fn winhttpwritedata_hook(
 ) -> BOOL {
     debug!("hit winhttpwritedata");
 
+    let orig = || DetourWriteData.call(
+        h_request,
+        lp_buffer,
+        dw_number_of_bytes_to_write,
+        lpdw_number_of_bytes_written,
+    );
+
     let url = match read_hinternet_url(h_request) {
         Ok(url) => url,
         Err(err) => {
             error!("There was an error reading the request URL: {:#}", err);
-            return DetourWriteData.call(
-                h_request,
-                lp_buffer,
-                dw_number_of_bytes_to_write,
-                lpdw_number_of_bytes_written,
-            );
+            return orig();
         }
     };
     debug!("winhttpwritedata URL: {url}");
@@ -90,35 +99,20 @@ unsafe fn winhttpwritedata_hook(
         Ok(data) => data,
         Err(err) => {
             error!("There was an error reading the request body: {:#}", err);
-            return DetourWriteData.call(
-                h_request,
-                lp_buffer,
-                dw_number_of_bytes_to_write,
-                lpdw_number_of_bytes_written,
-            );
+            return orig();
         }
     };
     debug!("winhttpwritedata request body: {request_body}");
 
     if !url.contains("UpsertUserAllApi") {
-        return DetourWriteData.call(
-            h_request,
-            lp_buffer,
-            dw_number_of_bytes_to_write,
-            lpdw_number_of_bytes_written,
-        );
+        return orig();
     }
 
     let upsert_req = match serde_json::from_str::<UpsertUserAllRequest>(&request_body) {
         Ok(req) => req,
         Err(err) => {
             error!("Could not parse request body: {:#}", err);
-            return DetourWriteData.call(
-                h_request,
-                lp_buffer,
-                dw_number_of_bytes_to_write,
-                lpdw_number_of_bytes_written,
-            );
+            return orig();
         }
     };
 
@@ -130,12 +124,7 @@ unsafe fn winhttpwritedata_hook(
         && !CONFIGURATION.cards.whitelist.contains(access_code)
     {
         info!("Card {access_code} is not whitelisted, skipping score submission");
-        return DetourWriteData.call(
-            h_request,
-            lp_buffer,
-            dw_number_of_bytes_to_write,
-            lpdw_number_of_bytes_written,
-        );
+        return orig();
     }
 
     let import = Import {
@@ -170,12 +159,7 @@ unsafe fn winhttpwritedata_hook(
         Err(err) => error!("Could not import scores for card {access_code}: {:#}", err),
     };
 
-    DetourWriteData.call(
-        h_request,
-        lp_buffer,
-        dw_number_of_bytes_to_write,
-        lpdw_number_of_bytes_written,
-    )
+    orig()
 }
 
 fn get_proc_address(module: &str, function: &str) -> Result<*mut __some_function> {
