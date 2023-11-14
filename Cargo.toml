@@ -1,0 +1,34 @@
+[package]
+name = "saekawa"
+version = "0.1.0"
+authors = ["beerpsi <lacvtg.a1.2023@gmail.com>"]
+edition = "2021"
+license = "0BSD"
+
+[lib]
+crate-type = ["cdylib"]
+
+[profile.release]
+strip = true  # Automatically strip symbols from the binary.
+opt-level = "z"  # Optimize for size.
+lto = true
+codegen-units = 1
+panic = "abort"
+
+[dependencies]
+winapi = { version = "0.3.9", features = ["winhttp", "minwindef", "consoleapi"] }
+serde = { version = "1.0.192", features = ["derive"] }
+serde_json = "1.0.108"
+anyhow = "1.0.75"
+confy = "0.5.1"
+lazy_static = "1.4.0"
+log = "0.4.20"
+url = "2.4.1"
+chrono = "0.4.31"
+env_logger = "0.10.1"
+retour = { version = "0.3.1", features = ["static-detour"] }
+widestring = "1.0.2"
+flate2 = "1.0.28"
+ureq = { version = "2.8.0", features = ["json"] }
+num_enum = "0.7.1"
+serde-aux = "4.2.0"
