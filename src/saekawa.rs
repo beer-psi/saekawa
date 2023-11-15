@@ -38,6 +38,16 @@ pub fn hook_init() -> Result<()> {
         .as_u64()
         .ok_or(anyhow::anyhow!("Couldn't parse user from Tachi response"))?;
 
+    let mut permissions = resp["body"]["permissions"]
+        .as_array()
+        .ok_or(anyhow!("Couldn't parse permissions from Tachi response"))?
+        .into_iter()
+        .filter_map(|v| v.as_str());
+
+    if permissions.all(|v| v != "submit_score") {
+        return Err(anyhow!("API key has insufficient permission. The permission submit_score must be set."));
+    }
+
     info!("Logged in to Tachi with userID {user_id}");
 
     let winhttpwritedata = unsafe {
