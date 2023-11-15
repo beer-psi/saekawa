@@ -51,10 +51,21 @@ pub struct CardsConfiguration {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CryptoConfiguration {
-    pub key: String,
-    pub iv: String,
-    pub salt: String,
+    #[serde(with = "faster_hex")]
+    pub key: Vec<u8>,
+
+    #[serde(with = "faster_hex")]
+    pub iv: Vec<u8>,
+
+    #[serde(with = "faster_hex")]
+    pub salt: Vec<u8>,
+
+    #[serde(default = "default_iterations")]
     pub iterations: u32,
+}
+
+fn default_iterations() -> u32 {
+    70
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

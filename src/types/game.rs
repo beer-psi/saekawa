@@ -76,7 +76,7 @@ pub struct UserPlaylog {
     pub is_clear: bool,
 }
 
-fn default_judge_heaven<'a>() -> u32 {
+fn default_judge_heaven() -> u32 {
     0
 }
 

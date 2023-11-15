@@ -4,7 +4,7 @@ mod log;
 mod saekawa;
 mod types;
 
-use ::log::error;
+use ::log::{debug, error};
 use lazy_static::lazy_static;
 use pbkdf2::pbkdf2_hmac_array;
 use sha1::Sha1;
@@ -46,27 +46,22 @@ lazy_static! {
 
         result.unwrap().to_string()
     };
-    pub static ref UPSERT_USER_ALL_API_ENCRYPTED: String = {
+    pub static ref UPSERT_USER_ALL_API_ENCRYPTED: Option<String> = {
         if CONFIGURATION.crypto.salt.is_empty() {
-            // return a bullshit value
-            return "ffffffffffffffffffffffffffffffff".to_string();
+            return None;
         }
 
-        let salt = match hex::decode(&CONFIGURATION.crypto.salt) {
-            Ok(salt) => salt,
-            Err(err) => {
-                error!("Could not parse salt as hex string: {:#}", err);
-                std::process::exit(1);
-            }
-        };
-
-        let key = pbkdf2_hmac_array::<Sha1, 16>(
+        let key_bytes = pbkdf2_hmac_array::<Sha1, 16>(
             b"UpsertUserAllApi",
-            &salt,
-            CONFIGURATION.crypto.iterations
+            &CONFIGURATION.crypto.salt,
+            CONFIGURATION.crypto.iterations,
         );
 
-        hex::encode(key)
+        let key = faster_hex::hex_string(&key_bytes);
+
+        debug!("Running with encryption support: UpsertUserAllApi maps to {key}");
+
+        Some(key)
     };
 }
 

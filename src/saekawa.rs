@@ -1,9 +1,7 @@
-use std::{ffi::CString, io::Read, ptr};
+use std::ffi::CString;
 
 use ::log::{debug, error, info};
-use aes::cipher::{block_padding::Pkcs7, BlockDecryptMut, BlockEncryptMut, KeyIvInit};
 use anyhow::{anyhow, Result};
-use flate2::read::ZlibDecoder;
 use retour::static_detour;
 use winapi::{
     ctypes::c_void,
@@ -15,18 +13,16 @@ use winapi::{
     },
 };
 
-type Aes128CbcDec = cbc::Decryptor<aes::Aes128>;
-
 use crate::{
     helpers::{
-        self, call_tachi, is_encrypted_endpoint, is_upsert_user_all_endpoint, read_hinternet_url,
-        read_potentially_deflated_buffer,
+        call_tachi, decrypt_aes256_cbc, is_encrypted_endpoint, is_upsert_user_all_endpoint,
+        read_hinternet_url, read_maybe_compressed_buffer, read_slice, request_tachi,
     },
     types::{
         game::UpsertUserAllRequest,
         tachi::{ClassEmblem, Import, ImportClasses, ImportScore},
     },
-    CONFIGURATION, TACHI_IMPORT_URL, TACHI_STATUS_URL,
+    CONFIGURATION, TACHI_IMPORT_URL, TACHI_STATUS_URL, UPSERT_USER_ALL_API_ENCRYPTED,
 };
 
 type WinHttpWriteDataFunc = unsafe extern "system" fn(HINTERNET, LPCVOID, DWORD, LPDWORD) -> BOOL;
@@ -40,8 +36,7 @@ pub fn hook_init() -> Result<()> {
         return Ok(());
     }
 
-    let resp: serde_json::Value =
-        helpers::request_tachi("GET", TACHI_STATUS_URL.as_str(), None::<()>)?;
+    let resp: serde_json::Value = request_tachi("GET", TACHI_STATUS_URL.as_str(), None::<()>)?;
     let user_id = resp["body"]["whoami"]
         .as_u64()
         .ok_or(anyhow::anyhow!("Couldn't parse user from Tachi response"))?;
@@ -55,9 +50,7 @@ pub fn hook_init() -> Result<()> {
     };
 
     unsafe {
-        DetourWriteData.initialize(winhttpwritedata, move |a, b, c, d| {
-            winhttpwritedata_hook(a, b, c, d)
-        })?;
+        DetourWriteData.initialize(winhttpwritedata, winhttpwritedata_hook)?;
 
         DetourWriteData.enable()?;
     };
@@ -76,7 +69,7 @@ pub fn hook_release() -> Result<()> {
     Ok(())
 }
 
-unsafe fn winhttpwritedata_hook(
+fn winhttpwritedata_hook(
     h_request: HINTERNET,
     lp_buffer: LPCVOID,
     dw_number_of_bytes_to_write: DWORD,
@@ -84,7 +77,7 @@ unsafe fn winhttpwritedata_hook(
 ) -> BOOL {
     debug!("hit winhttpwritedata");
 
-    let orig = || {
+    let orig = || unsafe {
         DetourWriteData.call(
             h_request,
             lp_buffer,
@@ -102,59 +95,55 @@ unsafe fn winhttpwritedata_hook(
     };
     debug!("winhttpwritedata URL: {url}");
 
-    let endpoint = match url.split('/').last() {
-        Some(endpoint) => endpoint,
-        None => {
-            error!("Could not get name of endpoint");
-            return orig();
-        }
+    let Some(endpoint) = url.split('/').last() else {
+        error!("Could not get name of endpoint");
+        return orig();
     };
 
-    let is_encrypted = is_encrypted_endpoint(endpoint);
-    if is_encrypted
-        && (CONFIGURATION.crypto.key.is_empty()
-            || CONFIGURATION.crypto.iv.is_empty()
-            || CONFIGURATION.crypto.salt.is_empty())
-    {
-        error!("Communications with the server is encrypted, but no keys were provided. Fill in the keys by editing 'saekawa.toml'.");
-        return orig();
-    }
-
-    let is_upsert_user_all = is_upsert_user_all_endpoint(endpoint, is_encrypted);
+    let is_upsert_user_all = is_upsert_user_all_endpoint(endpoint);
     // Exit early if release mode and the endpoint is not what we're looking for
     if cfg!(not(debug_assertions)) && !is_upsert_user_all {
         return orig();
     }
 
-    let raw_request_body = match read_potentially_deflated_buffer(
-        lp_buffer as *const u8,
-        dw_number_of_bytes_to_write as usize,
-    ) {
-        Ok(data) => data,
-        Err(err) => {
-            error!("There was an error reading the request body: {:#}", err);
-            return orig();
-        }
-    };
+    let is_encrypted = is_encrypted_endpoint(endpoint);
+    if is_encrypted
+        && (CONFIGURATION.crypto.key.is_empty()
+            || CONFIGURATION.crypto.iv.is_empty()
+            || UPSERT_USER_ALL_API_ENCRYPTED.is_none())
+    {
+        error!("Communications with the server is encrypted, but no keys were provided. Fill in the keys by editing 'saekawa.toml'.");
+        return orig();
+    }
 
-    let request_body_decrypted = if is_encrypted {
-        // TODO: Decrypt
-        Vec::new()
+    let mut raw_request_body =
+        match read_slice(lp_buffer as *const u8, dw_number_of_bytes_to_write as usize) {
+            Ok(data) => data,
+            Err(err) => {
+                error!("There was an error reading the request body: {:#}", err);
+                return orig();
+            }
+        };
+
+    debug!("raw request body: {:?}", raw_request_body);
+
+    let request_body_compressed = if is_encrypted {
+        match decrypt_aes256_cbc(
+            &mut raw_request_body,
+            &CONFIGURATION.crypto.key,
+            &CONFIGURATION.crypto.iv,
+        ) {
+            Ok(res) => res,
+            Err(err) => {
+                error!("Could not decrypt request: {:#}", err);
+                return orig();
+            }
+        }
     } else {
         raw_request_body
     };
 
-    let mut request_body_bytes = Vec::with_capacity(request_body_decrypted.len());
-    let mut decoder = ZlibDecoder::new(&request_body_decrypted[..]);
-    if let Err(err) = decoder.read_to_end(&mut request_body_bytes) {
-        debug!(
-            "Could not inflate request body, treating it as uncompressed: {:#}",
-            err
-        );
-        request_body_bytes = request_body_decrypted;
-    }
-
-    let request_body = match String::from_utf8(request_body_bytes) {
+    let request_body = match read_maybe_compressed_buffer(&request_body_compressed[..]) {
         Ok(data) => data,
         Err(err) => {
             error!("There was an error decoding the request body: {:#}", err);
@@ -162,7 +151,7 @@ unsafe fn winhttpwritedata_hook(
         }
     };
 
-    debug!("winhttpwritedata request body: {request_body}");
+    debug!("decoded request body: {request_body}");
 
     // Reached in debug mode
     if !is_upsert_user_all {
@@ -245,13 +234,13 @@ fn get_proc_address(module: &str, function: &str) -> Result<*mut __some_function
     let fun_name = CString::new(function).unwrap();
 
     let module = unsafe { GetModuleHandleA(module_name.as_ptr()) };
-    if (module as *const c_void) == ptr::null() {
+    if (module as *const c_void).is_null() {
         let ec = unsafe { GetLastError() };
         return Err(anyhow!("could not get module handle, error code {ec}"));
     }
 
     let addr = unsafe { GetProcAddress(module, fun_name.as_ptr()) };
-    if (addr as *const c_void) == ptr::null() {
+    if (addr as *const c_void).is_null() {
         let ec = unsafe { GetLastError() };
         return Err(anyhow!("could not get function address, error code {ec}"));
     }

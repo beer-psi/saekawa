@@ -1,6 +1,8 @@
 use std::{fmt::Debug, io::Read};
 
+use aes::cipher::{block_padding::Pkcs7, BlockDecryptMut, KeyIvInit};
 use anyhow::{anyhow, Result};
+use flate2::read::ZlibDecoder;
 use log::debug;
 use serde::{Deserialize, Serialize};
 use widestring::U16CString;
@@ -14,6 +16,8 @@ use winapi::{
 };
 
 use crate::{CONFIGURATION, UPSERT_USER_ALL_API_ENCRYPTED};
+
+type Aes256CbcDec = cbc::Decryptor<aes::Aes256>;
 
 pub fn request_agent() -> ureq::Agent {
     let timeout = CONFIGURATION.general.timeout;
@@ -78,6 +82,7 @@ where
     Ok(response)
 }
 
+/// Queries a HINTERNET handle for its URL, then return the result.
 pub fn read_hinternet_url(handle: HINTERNET) -> Result<String> {
     let mut buf_length = 255;
     let mut buffer = [0u16; 255];
@@ -124,8 +129,9 @@ pub fn read_hinternet_url(handle: HINTERNET) -> Result<String> {
     Err(anyhow!("Could not get URL from HINTERNET handle: {ec}"))
 }
 
-pub unsafe fn read_potentially_deflated_buffer(buf: *const u8, len: usize) -> Result<Vec<u8>> {
-    let mut slice = std::slice::from_raw_parts(buf, len);
+/// Read all bytes of a slice into a buffer.
+pub fn read_slice(buf: *const u8, len: usize) -> Result<Vec<u8>> {
+    let mut slice = unsafe { std::slice::from_raw_parts(buf, len) };
     let mut ret = Vec::with_capacity(len);
 
     slice.read_to_end(&mut ret)?;
@@ -133,23 +139,52 @@ pub unsafe fn read_potentially_deflated_buffer(buf: *const u8, len: usize) -> Re
     Ok(ret)
 }
 
-pub fn is_upsert_user_all_endpoint(endpoint: &str, is_encrypted: bool) -> bool {
+pub fn read_maybe_compressed_buffer(buf: impl AsRef<[u8]>) -> Result<String> {
+    let mut ret = String::new();
+
+    let mut decoder = ZlibDecoder::new(buf.as_ref());
+    let zlib_result = decoder.read_to_string(&mut ret);
+    if zlib_result.is_ok() {
+        return Ok(ret);
+    }
+
+    ret.clear();
+    let result = buf.as_ref().read_to_string(&mut ret);
+    if result.is_ok() {
+        return Ok(ret);
+    }
+
+    Err(anyhow!(
+        "Could not decode contents of buffer as both DEFLATE-compressed ({:#}) and plaintext ({:#}) UTF-8 string.",
+        zlib_result.expect_err("This shouldn't happen, if Result was Ok the string should have been returned earlier."),
+        result.expect_err("This shouldn't happen, if Result was Ok the string should have been returned earlier."),
+    ))
+}
+
+/// Determine if we're looking at the UpsertUserAllApi endpoint,
+/// which is the endpoint that contains our scores.
+pub fn is_upsert_user_all_endpoint(endpoint: &str) -> bool {
     if endpoint == "UpsertUserAllApi" {
         return true;
     }
 
-    if is_encrypted && endpoint == UPSERT_USER_ALL_API_ENCRYPTED.as_str() {
+    if UPSERT_USER_ALL_API_ENCRYPTED
+        .as_ref()
+        .is_some_and(|v| v == endpoint)
+    {
         return true;
     }
 
     false
 }
 
+/// Determine if it is an encrypted endpoint by checking if the endpoint
+/// is exactly 32 characters long, and consists of all hex characters.
+///
+/// While this may trigger false positives, this should not happen as long
+/// as CHUNITHM title APIs keep their `{method}{object}Api` endpoint
+/// convention.
 pub fn is_encrypted_endpoint(endpoint: &str) -> bool {
-    // If it's a hex string of 32 characters, we're most likely dealing
-    // with title server encryption. Chance of false positive is very low,
-    // but technically not 0.
-
     if endpoint.len() != 32 {
         return false;
     }
@@ -160,4 +195,16 @@ pub fn is_encrypted_endpoint(endpoint: &str) -> bool {
     }
 
     true
+}
+
+pub fn decrypt_aes256_cbc(
+    body: &mut [u8],
+    key: impl AsRef<[u8]>,
+    iv: impl AsRef<[u8]>,
+) -> Result<Vec<u8>> {
+    let cipher = Aes256CbcDec::new_from_slices(key.as_ref(), iv.as_ref())?;
+    Ok(cipher
+        .decrypt_padded_mut::<Pkcs7>(body)
+        .map_err(|err| anyhow!("{:#}", err))?
+        .to_owned())
 }

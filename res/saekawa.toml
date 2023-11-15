@@ -3,6 +3,8 @@
 enable = true
 # Whether the hook should export your class medals and emblems or not.
 export_class = true
+# Whether FAILED should override FULL COMBO and ALL JUSTICE.
+fail_over_lamp = false
 # Timeout for web requests, in milliseconds
 timeout = 3000
 
