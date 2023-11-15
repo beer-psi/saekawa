@@ -1,7 +1,9 @@
-use std::{ffi::CString, ptr};
+use std::{ffi::CString, io::Read, ptr};
 
 use ::log::{debug, error, info};
+use aes::cipher::{block_padding::Pkcs7, BlockDecryptMut, BlockEncryptMut, KeyIvInit};
 use anyhow::{anyhow, Result};
+use flate2::read::ZlibDecoder;
 use retour::static_detour;
 use winapi::{
     ctypes::c_void,
@@ -13,8 +15,13 @@ use winapi::{
     },
 };
 
+type Aes128CbcDec = cbc::Decryptor<aes::Aes128>;
+
 use crate::{
-    helpers::{call_tachi, read_hinternet_url, read_potentially_deflated_buffer, self},
+    helpers::{
+        self, call_tachi, is_encrypted_endpoint, is_upsert_user_all_endpoint, read_hinternet_url,
+        read_potentially_deflated_buffer,
+    },
     types::{
         game::UpsertUserAllRequest,
         tachi::{ClassEmblem, Import, ImportClasses, ImportScore},
@@ -33,7 +40,8 @@ pub fn hook_init() -> Result<()> {
         return Ok(());
     }
 
-    let resp: serde_json::Value = helpers::request_tachi("GET", TACHI_STATUS_URL.as_str(), None::<()>)?;
+    let resp: serde_json::Value =
+        helpers::request_tachi("GET", TACHI_STATUS_URL.as_str(), None::<()>)?;
     let user_id = resp["body"]["whoami"]
         .as_u64()
         .ok_or(anyhow::anyhow!("Couldn't parse user from Tachi response"))?;
@@ -76,12 +84,14 @@ unsafe fn winhttpwritedata_hook(
 ) -> BOOL {
     debug!("hit winhttpwritedata");
 
-    let orig = || DetourWriteData.call(
-        h_request,
-        lp_buffer,
-        dw_number_of_bytes_to_write,
-        lpdw_number_of_bytes_written,
-    );
+    let orig = || {
+        DetourWriteData.call(
+            h_request,
+            lp_buffer,
+            dw_number_of_bytes_to_write,
+            lpdw_number_of_bytes_written,
+        )
+    };
 
     let url = match read_hinternet_url(h_request) {
         Ok(url) => url,
@@ -92,7 +102,31 @@ unsafe fn winhttpwritedata_hook(
     };
     debug!("winhttpwritedata URL: {url}");
 
-    let request_body = match read_potentially_deflated_buffer(
+    let endpoint = match url.split('/').last() {
+        Some(endpoint) => endpoint,
+        None => {
+            error!("Could not get name of endpoint");
+            return orig();
+        }
+    };
+
+    let is_encrypted = is_encrypted_endpoint(endpoint);
+    if is_encrypted
+        && (CONFIGURATION.crypto.key.is_empty()
+            || CONFIGURATION.crypto.iv.is_empty()
+            || CONFIGURATION.crypto.salt.is_empty())
+    {
+        error!("Communications with the server is encrypted, but no keys were provided. Fill in the keys by editing 'saekawa.toml'.");
+        return orig();
+    }
+
+    let is_upsert_user_all = is_upsert_user_all_endpoint(endpoint, is_encrypted);
+    // Exit early if release mode and the endpoint is not what we're looking for
+    if cfg!(not(debug_assertions)) && !is_upsert_user_all {
+        return orig();
+    }
+
+    let raw_request_body = match read_potentially_deflated_buffer(
         lp_buffer as *const u8,
         dw_number_of_bytes_to_write as usize,
     ) {
@@ -102,9 +136,36 @@ unsafe fn winhttpwritedata_hook(
             return orig();
         }
     };
+
+    let request_body_decrypted = if is_encrypted {
+        // TODO: Decrypt
+        Vec::new()
+    } else {
+        raw_request_body
+    };
+
+    let mut request_body_bytes = Vec::with_capacity(request_body_decrypted.len());
+    let mut decoder = ZlibDecoder::new(&request_body_decrypted[..]);
+    if let Err(err) = decoder.read_to_end(&mut request_body_bytes) {
+        debug!(
+            "Could not inflate request body, treating it as uncompressed: {:#}",
+            err
+        );
+        request_body_bytes = request_body_decrypted;
+    }
+
+    let request_body = match String::from_utf8(request_body_bytes) {
+        Ok(data) => data,
+        Err(err) => {
+            error!("There was an error decoding the request body: {:#}", err);
+            return orig();
+        }
+    };
+
     debug!("winhttpwritedata request body: {request_body}");
 
-    if !url.contains("UpsertUserAllApi") {
+    // Reached in debug mode
+    if !is_upsert_user_all {
         return orig();
     }
 
@@ -157,7 +218,10 @@ unsafe fn winhttpwritedata_hook(
             return orig();
         }
 
-        if classes.clone().is_some_and(|v| v.dan.is_none() && v.emblem.is_none()) {
+        if classes
+            .clone()
+            .is_some_and(|v| v.dan.is_none() && v.emblem.is_none())
+        {
             return orig();
         }
     }

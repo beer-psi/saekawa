@@ -6,6 +6,8 @@ mod types;
 
 use ::log::error;
 use lazy_static::lazy_static;
+use pbkdf2::pbkdf2_hmac_array;
+use sha1::Sha1;
 use url::Url;
 use winapi::shared::minwindef::{BOOL, DWORD, HINSTANCE, LPVOID, TRUE};
 use winapi::um::winnt::{DLL_PROCESS_ATTACH, DLL_PROCESS_DETACH};
@@ -43,6 +45,28 @@ lazy_static! {
         }
 
         result.unwrap().to_string()
+    };
+    pub static ref UPSERT_USER_ALL_API_ENCRYPTED: String = {
+        if CONFIGURATION.crypto.salt.is_empty() {
+            // return a bullshit value
+            return "ffffffffffffffffffffffffffffffff".to_string();
+        }
+
+        let salt = match hex::decode(&CONFIGURATION.crypto.salt) {
+            Ok(salt) => salt,
+            Err(err) => {
+                error!("Could not parse salt as hex string: {:#}", err);
+                std::process::exit(1);
+            }
+        };
+
+        let key = pbkdf2_hmac_array::<Sha1, 16>(
+            b"UpsertUserAllApi",
+            &salt,
+            CONFIGURATION.crypto.iterations
+        );
+
+        hex::encode(key)
     };
 }
 

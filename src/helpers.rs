@@ -1,7 +1,6 @@
 use std::{fmt::Debug, io::Read};
 
 use anyhow::{anyhow, Result};
-use flate2::read::ZlibDecoder;
 use log::debug;
 use serde::{Deserialize, Serialize};
 use widestring::U16CString;
@@ -14,7 +13,7 @@ use winapi::{
     },
 };
 
-use crate::CONFIGURATION;
+use crate::{CONFIGURATION, UPSERT_USER_ALL_API_ENCRYPTED};
 
 pub fn request_agent() -> ureq::Agent {
     let timeout = CONFIGURATION.general.timeout;
@@ -122,20 +121,43 @@ pub fn read_hinternet_url(handle: HINTERNET) -> Result<String> {
     }
 
     let ec = unsafe { GetLastError() };
-    return Err(anyhow!("Could not get URL from HINTERNET handle: {ec}"));
+    Err(anyhow!("Could not get URL from HINTERNET handle: {ec}"))
 }
 
-pub unsafe fn read_potentially_deflated_buffer(buf: *const u8, len: usize) -> Result<String> {
+pub unsafe fn read_potentially_deflated_buffer(buf: *const u8, len: usize) -> Result<Vec<u8>> {
     let mut slice = std::slice::from_raw_parts(buf, len);
-    let mut ret = String::new();
+    let mut ret = Vec::with_capacity(len);
 
-    let _ = if slice[0] == 120 && slice[1] == 156 {
-        // Just a really dumb check if the request is sent over zlib or not
-        let mut decoder = ZlibDecoder::new(slice);
-        decoder.read_to_string(&mut ret)
-    } else {
-        slice.read_to_string(&mut ret)
-    }?;
+    slice.read_to_end(&mut ret)?;
 
     Ok(ret)
+}
+
+pub fn is_upsert_user_all_endpoint(endpoint: &str, is_encrypted: bool) -> bool {
+    if endpoint == "UpsertUserAllApi" {
+        return true;
+    }
+
+    if is_encrypted && endpoint == UPSERT_USER_ALL_API_ENCRYPTED.as_str() {
+        return true;
+    }
+
+    false
+}
+
+pub fn is_encrypted_endpoint(endpoint: &str) -> bool {
+    // If it's a hex string of 32 characters, we're most likely dealing
+    // with title server encryption. Chance of false positive is very low,
+    // but technically not 0.
+
+    if endpoint.len() != 32 {
+        return false;
+    }
+
+    // Lazy way to check if all digits are hexadecimal
+    if u128::from_str_radix(endpoint, 16).is_err() {
+        return false;
+    }
+
+    true
 }

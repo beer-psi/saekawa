@@ -32,3 +32,8 @@ flate2 = "1.0.28"
 ureq = { version = "2.8.0", features = ["json"] }
 num_enum = "0.7.1"
 serde-aux = "4.2.0"
+pbkdf2 = "0.12.2"
+sha1 = "0.10.6"
+hex = "0.4.3"
+aes = "0.8.3"
+cbc = "0.1.2"
