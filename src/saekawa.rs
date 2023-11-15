@@ -20,7 +20,7 @@ use crate::{
     },
     types::{
         game::UpsertUserAllRequest,
-        tachi::{ClassEmblem, Import, ImportClasses, ImportScore},
+        tachi::{ClassEmblem, Difficulty, Import, ImportClasses, ImportScore},
     },
     CONFIGURATION, TACHI_IMPORT_URL, TACHI_STATUS_URL, UPSERT_USER_ALL_API_ENCRYPTED,
 };
@@ -41,6 +41,16 @@ pub fn hook_init() -> Result<()> {
         .as_u64()
         .ok_or(anyhow::anyhow!("Couldn't parse user from Tachi response"))?;
 
+    let mut permissions = resp["body"]["permissions"]
+        .as_array()
+        .ok_or(anyhow!("Couldn't parse permissions from Tachi response"))?
+        .into_iter()
+        .filter_map(|v| v.as_str());
+
+    if permissions.all(|v| v != "submit_score") {
+        return Err(anyhow!("API key has insufficient permission. The permission submit_score must be set."));
+    }
+
     info!("Logged in to Tachi with userID {user_id}");
 
     let winhttpwritedata = unsafe {
@@ -50,12 +60,13 @@ pub fn hook_init() -> Result<()> {
     };
 
     unsafe {
-        DetourWriteData.initialize(winhttpwritedata, winhttpwritedata_hook)?;
-
-        DetourWriteData.enable()?;
+        DetourWriteData
+            .initialize(winhttpwritedata, winhttpwritedata_hook)?
+            .enable()?;
     };
 
     info!("Hook successfully initialized");
+
     Ok(())
 }
 
@@ -191,11 +202,13 @@ fn winhttpwritedata_hook(
         .user_playlog_list
         .into_iter()
         .filter_map(|playlog| {
-            if let Ok(score) = ImportScore::try_from(playlog) {
-                if score.difficulty.as_str() == "WORLD'S END" {
-                    return None;
-                }
-                Some(score)
+            let result =
+                ImportScore::try_from_playlog(playlog, CONFIGURATION.general.fail_over_lamp);
+            if result
+                .as_ref()
+                .is_ok_and(|v| v.difficulty != Difficulty::WorldsEnd)
+            {
+                result.ok()
             } else {
                 None
             }

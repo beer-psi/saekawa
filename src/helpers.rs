@@ -129,7 +129,6 @@ pub fn read_hinternet_url(handle: HINTERNET) -> Result<String> {
     Err(anyhow!("Could not get URL from HINTERNET handle: {ec}"))
 }
 
-/// Read all bytes of a slice into a buffer.
 pub fn read_slice(buf: *const u8, len: usize) -> Result<Vec<u8>> {
     let mut slice = unsafe { std::slice::from_raw_parts(buf, len) };
     let mut ret = Vec::with_capacity(len);
