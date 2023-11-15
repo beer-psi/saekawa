@@ -17,7 +17,7 @@ use crate::{
     helpers::{call_tachi, read_hinternet_url, read_potentially_deflated_buffer, request_tachi},
     types::{
         game::UpsertUserAllRequest,
-        tachi::{ClassEmblem, Import, ImportClasses, ImportScore, Difficulty},
+        tachi::{ClassEmblem, Difficulty, Import, ImportClasses, ImportScore},
     },
     CONFIGURATION, TACHI_IMPORT_URL, TACHI_STATUS_URL,
 };
@@ -93,12 +93,10 @@ fn winhttpwritedata_hook(
     };
     debug!("winhttpwritedata URL: {url}");
 
-    let request_body = match unsafe {
-        read_potentially_deflated_buffer(
-            lp_buffer as *const u8,
-            dw_number_of_bytes_to_write as usize,
-        )
-    } {
+    let request_body = match read_potentially_deflated_buffer(
+        lp_buffer as *const u8,
+        dw_number_of_bytes_to_write as usize,
+    ) {
         Ok(data) => data,
         Err(err) => {
             error!("There was an error reading the request body: {:#}", err);
@@ -144,8 +142,12 @@ fn winhttpwritedata_hook(
         .user_playlog_list
         .into_iter()
         .filter_map(|playlog| {
-            let result = ImportScore::try_from_playlog(playlog, CONFIGURATION.general.fail_over_lamp);
-            if result.as_ref().is_ok_and(|v| v.difficulty != Difficulty::WorldsEnd) {
+            let result =
+                ImportScore::try_from_playlog(playlog, CONFIGURATION.general.fail_over_lamp);
+            if result
+                .as_ref()
+                .is_ok_and(|v| v.difficulty != Difficulty::WorldsEnd)
+            {
                 result.ok()
             } else {
                 None

@@ -125,17 +125,26 @@ pub fn read_hinternet_url(handle: HINTERNET) -> Result<String> {
     return Err(anyhow!("Could not get URL from HINTERNET handle: {ec}"));
 }
 
-pub unsafe fn read_potentially_deflated_buffer(buf: *const u8, len: usize) -> Result<String> {
-    let mut slice = std::slice::from_raw_parts(buf, len);
+pub fn read_potentially_deflated_buffer(buf: *const u8, len: usize) -> Result<String> {
+    let mut slice = unsafe { std::slice::from_raw_parts(buf, len) };
     let mut ret = String::new();
 
-    let _ = if slice[0] == 120 && slice[1] == 156 {
-        // Just a really dumb check if the request is sent over zlib or not
-        let mut decoder = ZlibDecoder::new(slice);
-        decoder.read_to_string(&mut ret)
-    } else {
-        slice.read_to_string(&mut ret)
-    }?;
+    let mut decoder = ZlibDecoder::new(slice);
+    let zlib_result = decoder.read_to_string(&mut ret);
+    if zlib_result.is_ok() {
+        return Ok(ret);
+    }
 
-    Ok(ret)
+    ret.clear();
+    let result = slice.read_to_string(&mut ret);
+    if result.is_ok() {
+        return Ok(ret);
+    }
+
+    // Unwrapping here is fine, if result was Ok we wouldn't reach this place.
+    Err(anyhow!(
+        "Could not decode contents of buffer as both DEFLATE-compressed ({:#}) and plaintext ({:#}) UTF-8 string.",
+        zlib_result.err().expect("This shouldn't happen, if Result was Ok the string should have been returned earlier."),
+        result.err().expect("This shouldn't happen, if Result was Ok the string should have been returned earlier."),
+    ))
 }
