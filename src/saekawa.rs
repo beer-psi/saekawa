@@ -14,7 +14,7 @@ use winapi::{
 };
 
 use crate::{
-    helpers::{call_tachi, read_hinternet_url, read_potentially_deflated_buffer, self},
+    helpers::{call_tachi, read_hinternet_url, read_potentially_deflated_buffer, request_tachi},
     types::{
         game::UpsertUserAllRequest,
         tachi::{ClassEmblem, Import, ImportClasses, ImportScore},
@@ -33,7 +33,7 @@ pub fn hook_init() -> Result<()> {
         return Ok(());
     }
 
-    let resp: serde_json::Value = helpers::request_tachi("GET", TACHI_STATUS_URL.as_str(), None::<()>)?;
+    let resp: serde_json::Value = request_tachi("GET", TACHI_STATUS_URL.as_str(), None::<()>)?;
     let user_id = resp["body"]["whoami"]
         .as_u64()
         .ok_or(anyhow::anyhow!("Couldn't parse user from Tachi response"))?;
@@ -47,14 +47,13 @@ pub fn hook_init() -> Result<()> {
     };
 
     unsafe {
-        DetourWriteData.initialize(winhttpwritedata, move |a, b, c, d| {
-            winhttpwritedata_hook(a, b, c, d)
-        })?;
-
-        DetourWriteData.enable()?;
+        DetourWriteData
+            .initialize(winhttpwritedata, winhttpwritedata_hook)?
+            .enable()?;
     };
 
     info!("Hook successfully initialized");
+
     Ok(())
 }
 
@@ -68,7 +67,7 @@ pub fn hook_release() -> Result<()> {
     Ok(())
 }
 
-unsafe fn winhttpwritedata_hook(
+fn winhttpwritedata_hook(
     h_request: HINTERNET,
     lp_buffer: LPCVOID,
     dw_number_of_bytes_to_write: DWORD,
@@ -76,12 +75,14 @@ unsafe fn winhttpwritedata_hook(
 ) -> BOOL {
     debug!("hit winhttpwritedata");
 
-    let orig = || DetourWriteData.call(
-        h_request,
-        lp_buffer,
-        dw_number_of_bytes_to_write,
-        lpdw_number_of_bytes_written,
-    );
+    let orig = || unsafe {
+        DetourWriteData.call(
+            h_request,
+            lp_buffer,
+            dw_number_of_bytes_to_write,
+            lpdw_number_of_bytes_written,
+        )
+    };
 
     let url = match read_hinternet_url(h_request) {
         Ok(url) => url,
@@ -92,10 +93,12 @@ unsafe fn winhttpwritedata_hook(
     };
     debug!("winhttpwritedata URL: {url}");
 
-    let request_body = match read_potentially_deflated_buffer(
-        lp_buffer as *const u8,
-        dw_number_of_bytes_to_write as usize,
-    ) {
+    let request_body = match unsafe {
+        read_potentially_deflated_buffer(
+            lp_buffer as *const u8,
+            dw_number_of_bytes_to_write as usize,
+        )
+    } {
         Ok(data) => data,
         Err(err) => {
             error!("There was an error reading the request body: {:#}", err);
@@ -141,7 +144,9 @@ unsafe fn winhttpwritedata_hook(
         .user_playlog_list
         .into_iter()
         .filter_map(|playlog| {
-            if let Ok(score) = ImportScore::try_from(playlog) {
+            if let Ok(score) =
+                ImportScore::try_from_playlog(playlog, CONFIGURATION.general.fail_over_lamp)
+            {
                 if score.difficulty.as_str() == "WORLD'S END" {
                     return None;
                 }
@@ -157,7 +162,10 @@ unsafe fn winhttpwritedata_hook(
             return orig();
         }
 
-        if classes.clone().is_some_and(|v| v.dan.is_none() && v.emblem.is_none()) {
+        if classes
+            .clone()
+            .is_some_and(|v| v.dan.is_none() && v.emblem.is_none())
+        {
             return orig();
         }
     }

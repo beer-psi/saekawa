@@ -1,4 +1,4 @@
-use anyhow::anyhow;
+use anyhow::{anyhow, Result};
 use chrono::{FixedOffset, NaiveDateTime, TimeZone};
 use num_enum::TryFromPrimitive;
 use serde::{Deserialize, Serialize};
@@ -107,11 +107,11 @@ pub struct OptionalMetrics {
     pub max_combo: u32,
 }
 
-impl TryFrom<UserPlaylog> for ImportScore {
-    type Error = anyhow::Error;
-
-    fn try_from(p: UserPlaylog) -> Result<ImportScore, Self::Error> {
-        let lamp = if p.is_all_justice {
+impl ImportScore {
+    pub fn try_from_playlog(p: UserPlaylog, fail_over_lamp: bool) -> Result<ImportScore> {
+        let lamp = if !p.is_clear && fail_over_lamp {
+            TachiLamp::Failed
+        } else if p.is_all_justice {
             if p.judge_justice + p.judge_attack + p.judge_guilty == 0 {
                 TachiLamp::AllJusticeCritical
             } else {

@@ -28,14 +28,23 @@ impl Configuration {
 pub struct GeneralConfiguration {
     #[serde(default = "default_true")]
     pub enable: bool,
-    #[serde(default)]
+
+    #[serde(default = "default_true")]
     pub export_class: bool,
+
+    #[serde(default = "default_false")]
+    pub fail_over_lamp: bool,
+
     #[serde(default = "default_timeout")]
     pub timeout: u64,
 }
 
 fn default_true() -> bool {
     true
+}
+
+fn default_false() -> bool {
+    false
 }
 
 fn default_timeout() -> u64 {
