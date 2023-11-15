@@ -8,6 +8,7 @@ use std::path::Path;
 pub struct Configuration {
     pub general: GeneralConfiguration,
     pub cards: CardsConfiguration,
+    pub crypto: CryptoConfiguration,
     pub tachi: TachiConfiguration,
 }
 
@@ -55,6 +56,25 @@ fn default_timeout() -> u64 {
 pub struct CardsConfiguration {
     #[serde(default)]
     pub whitelist: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CryptoConfiguration {
+    #[serde(with = "faster_hex")]
+    pub key: Vec<u8>,
+
+    #[serde(with = "faster_hex")]
+    pub iv: Vec<u8>,
+
+    #[serde(with = "faster_hex")]
+    pub salt: Vec<u8>,
+
+    #[serde(default = "default_iterations")]
+    pub iterations: u32,
+}
+
+fn default_iterations() -> u32 {
+    70
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

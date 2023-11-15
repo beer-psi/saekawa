@@ -15,6 +15,19 @@ timeout = 3000
 # example: whitelist = ["00001111222233334444"]
 whitelist = []
 
+[crypto]
+# Since CRYSTAL+, the game employs network encryption. If you do not wish to
+# patch your game to disable encryption, you will need to fill in these values.
+#
+# All values are in hex strings.
+key = ""
+iv = ""
+salt = ""
+
+# Number of PBKDF2 iterations to hash the endpoint URL. Set to 70 for CHUNITHM SUN
+# and newer, and 44 for older versions.
+iterations = 70
+
 [tachi]
 # Tachi instance base URL
 base_url = 'https://kamaitachi.xyz/'

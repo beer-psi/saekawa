@@ -1,4 +1,4 @@
-use std::{ffi::CString, ptr};
+use std::ffi::CString;
 
 use ::log::{debug, error, info};
 use anyhow::{anyhow, Result};
@@ -14,12 +14,15 @@ use winapi::{
 };
 
 use crate::{
-    helpers::{call_tachi, read_hinternet_url, read_potentially_deflated_buffer, request_tachi},
+    helpers::{
+        call_tachi, decrypt_aes256_cbc, is_encrypted_endpoint, is_upsert_user_all_endpoint,
+        read_hinternet_url, read_maybe_compressed_buffer, read_slice, request_tachi,
+    },
     types::{
         game::UpsertUserAllRequest,
         tachi::{ClassEmblem, Difficulty, Import, ImportClasses, ImportScore},
     },
-    CONFIGURATION, TACHI_IMPORT_URL, TACHI_STATUS_URL,
+    CONFIGURATION, TACHI_IMPORT_URL, TACHI_STATUS_URL, UPSERT_USER_ALL_API_ENCRYPTED,
 };
 
 type WinHttpWriteDataFunc = unsafe extern "system" fn(HINTERNET, LPCVOID, DWORD, LPDWORD) -> BOOL;
@@ -103,19 +106,66 @@ fn winhttpwritedata_hook(
     };
     debug!("winhttpwritedata URL: {url}");
 
-    let request_body = match read_potentially_deflated_buffer(
-        lp_buffer as *const u8,
-        dw_number_of_bytes_to_write as usize,
-    ) {
+    let Some(endpoint) = url.split('/').last() else {
+        error!("Could not get name of endpoint");
+        return orig();
+    };
+
+    let is_upsert_user_all = is_upsert_user_all_endpoint(endpoint);
+    // Exit early if release mode and the endpoint is not what we're looking for
+    if cfg!(not(debug_assertions)) && !is_upsert_user_all {
+        return orig();
+    }
+
+    let is_encrypted = is_encrypted_endpoint(endpoint);
+    if is_encrypted
+        && (CONFIGURATION.crypto.key.is_empty()
+            || CONFIGURATION.crypto.iv.is_empty()
+            || UPSERT_USER_ALL_API_ENCRYPTED.is_none())
+    {
+        error!("Communications with the server is encrypted, but no keys were provided. Fill in the keys by editing 'saekawa.toml'.");
+        return orig();
+    }
+
+    let mut raw_request_body =
+        match read_slice(lp_buffer as *const u8, dw_number_of_bytes_to_write as usize) {
+            Ok(data) => data,
+            Err(err) => {
+                error!("There was an error reading the request body: {:#}", err);
+                return orig();
+            }
+        };
+
+    debug!("raw request body: {:?}", raw_request_body);
+
+    let request_body_compressed = if is_encrypted {
+        match decrypt_aes256_cbc(
+            &mut raw_request_body,
+            &CONFIGURATION.crypto.key,
+            &CONFIGURATION.crypto.iv,
+        ) {
+            Ok(res) => res,
+            Err(err) => {
+                error!("Could not decrypt request: {:#}", err);
+                return orig();
+            }
+        }
+    } else {
+        raw_request_body
+    };
+
+    let request_body = match read_maybe_compressed_buffer(&request_body_compressed[..]) {
         Ok(data) => data,
         Err(err) => {
-            error!("There was an error reading the request body: {:#}", err);
+            error!("There was an error decoding the request body: {:#}", err);
             return orig();
         }
     };
-    debug!("winhttpwritedata request body: {request_body}");
 
-    if !url.contains("UpsertUserAllApi") {
+    debug!("decoded request body: {request_body}");
+
+    // Reached in debug mode
+    if !is_upsert_user_all {
         return orig();
     }
 
@@ -197,13 +247,13 @@ fn get_proc_address(module: &str, function: &str) -> Result<*mut __some_function
     let fun_name = CString::new(function).unwrap();
 
     let module = unsafe { GetModuleHandleA(module_name.as_ptr()) };
-    if (module as *const c_void) == ptr::null() {
+    if (module as *const c_void).is_null() {
         let ec = unsafe { GetLastError() };
         return Err(anyhow!("could not get module handle, error code {ec}"));
     }
 
     let addr = unsafe { GetProcAddress(module, fun_name.as_ptr()) };
-    if (addr as *const c_void) == ptr::null() {
+    if (addr as *const c_void).is_null() {
         let ec = unsafe { GetLastError() };
         return Err(anyhow!("could not get function address, error code {ec}"));
     }
