@@ -17,7 +17,7 @@ use crate::{
     helpers::{call_tachi, read_hinternet_url, read_potentially_deflated_buffer, request_tachi},
     types::{
         game::UpsertUserAllRequest,
-        tachi::{ClassEmblem, Import, ImportClasses, ImportScore},
+        tachi::{ClassEmblem, Import, ImportClasses, ImportScore, Difficulty},
     },
     CONFIGURATION, TACHI_IMPORT_URL, TACHI_STATUS_URL,
 };
@@ -144,13 +144,9 @@ fn winhttpwritedata_hook(
         .user_playlog_list
         .into_iter()
         .filter_map(|playlog| {
-            if let Ok(score) =
-                ImportScore::try_from_playlog(playlog, CONFIGURATION.general.fail_over_lamp)
-            {
-                if score.difficulty.as_str() == "WORLD'S END" {
-                    return None;
-                }
-                Some(score)
+            let result = ImportScore::try_from_playlog(playlog, CONFIGURATION.general.fail_over_lamp);
+            if result.as_ref().is_ok_and(|v| v.difficulty != Difficulty::WorldsEnd) {
+                result.ok()
             } else {
                 None
             }

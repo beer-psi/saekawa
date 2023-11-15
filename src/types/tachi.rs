@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use chrono::{FixedOffset, NaiveDateTime, TimeZone};
 use num_enum::TryFromPrimitive;
 use serde::{Deserialize, Serialize};
@@ -68,7 +68,7 @@ pub struct ImportScore {
     pub lamp: TachiLamp,
     pub match_type: String,
     pub identifier: String,
-    pub difficulty: String,
+    pub difficulty: Difficulty,
     pub time_achieved: u128,
     pub judgements: Judgements,
     pub optional: OptionalMetrics,
@@ -91,6 +91,28 @@ pub enum TachiLamp {
 
     #[serde(rename = "ALL JUSTICE CRITICAL")]
     AllJusticeCritical = 4,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, TryFromPrimitive)]
+#[repr(u32)]
+pub enum Difficulty {
+    #[serde(rename = "BASIC")]
+    Basic = 0,
+
+    #[serde(rename = "ADVANCED")]
+    Advanced = 1,
+
+    #[serde(rename = "EXPERT")]
+    Expert = 2,
+
+    #[serde(rename = "MASTER")]
+    Master = 3,
+
+    #[serde(rename = "ULTIMA")]
+    Ultima = 4,
+
+    #[serde(rename = "WORLD'S END")]
+    WorldsEnd = 5,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -133,23 +155,11 @@ impl ImportScore {
         };
 
         let rom_major_version = p.rom_version.split('.').next().unwrap_or("2");
-        let difficulty = match p.level {
-            0 => "BASIC",
-            1 => "ADVANCED",
-            2 => "EXPERT",
-            3 => "MASTER",
-            4 => if rom_major_version == "2" {
-                "ULTIMA"
-            } else {
-                "WORLD'S END"
-            },
-            5 => if rom_major_version == "2" {
-                "WORLD'S END"
-            } else {
-                return Err(anyhow!("difficulty index '5' should not be possible on rom_version {rom_major_version}."));
-            },
-            _ => return Err(anyhow!("unknown difficulty index {level} on major version {rom_major_version}", level=p.level)),
-        }.to_string();
+        let difficulty = if rom_major_version == "1" && p.level == 4 {
+            Difficulty::WorldsEnd
+        } else {
+            Difficulty::try_from(p.level)?
+        };
 
         let datetime = NaiveDateTime::parse_from_str(&p.user_play_date, "%Y-%m-%d %H:%M:%S")?;
         let jst_offset =
