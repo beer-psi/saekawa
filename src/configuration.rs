@@ -60,13 +60,13 @@ pub struct CardsConfiguration {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CryptoConfiguration {
-    #[serde(with = "faster_hex")]
+    #[serde(with = "faster_hex::nopfx_lowercase")]
     pub key: Vec<u8>,
 
-    #[serde(with = "faster_hex")]
+    #[serde(with = "faster_hex::nopfx_lowercase")]
     pub iv: Vec<u8>,
 
-    #[serde(with = "faster_hex")]
+    #[serde(with = "faster_hex::nopfx_lowercase")]
     pub salt: Vec<u8>,
 
     #[serde(default = "default_iterations")]
