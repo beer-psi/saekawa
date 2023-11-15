@@ -7,8 +7,12 @@ use std::path::Path;
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Configuration {
     pub general: GeneralConfiguration,
+    
     pub cards: CardsConfiguration,
+    
+    #[serde(default)]
     pub crypto: CryptoConfiguration,
+    
     pub tachi: TachiConfiguration,
 }
 
