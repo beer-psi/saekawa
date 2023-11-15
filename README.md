@@ -16,6 +16,12 @@ edit your segatools game.bat to look like the green line:
 + inject_x86.exe -d -k saekawa.dll -k chusanhook.dll chusanApp.exe
 ```
 
+### Caveats
+This hook requires the game's network communications to be decrypted, which can be done
+by patching the game binary with your preferred patcher.
+
+Support for encrypted requests might come soon.
+
 ### Credits
 - Adam Thibert ([adamaq01](https://github.com/adamaq01)). A lot of the code was shamelessly lifted from his
 [Mikado](https://github.com/adamaq01/Mikado), a similar hook for SDVX.
