@@ -1,4 +1,7 @@
-## Saekawa
+<h1 align="center">saekawa</h1>
+
+<p align="center">インパアフェクシオン・ホワイトガアル</p>
+
 CHUNITHM hook to submit your scores to Tachi every credit.
 
 ### Features
