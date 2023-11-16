@@ -1,9 +1,9 @@
-use std::{fmt::Debug, io::Read};
+use std::{fmt::Debug, io::Read, ptr};
 
 use aes::cipher::{block_padding::Pkcs7, BlockDecryptMut, KeyIvInit};
 use anyhow::{anyhow, Result};
 use flate2::read::ZlibDecoder;
-use log::debug;
+use log::{debug, error, info};
 use serde::{Deserialize, Serialize};
 use widestring::U16CString;
 use winapi::{
@@ -11,11 +11,17 @@ use winapi::{
     shared::{minwindef::TRUE, winerror::ERROR_INSUFFICIENT_BUFFER},
     um::{
         errhandlingapi::GetLastError,
-        winhttp::{WinHttpQueryOption, HINTERNET, WINHTTP_OPTION_URL},
+        winhttp::{
+            WinHttpQueryHeaders, WinHttpQueryOption, HINTERNET, WINHTTP_OPTION_URL,
+            WINHTTP_QUERY_FLAG_REQUEST_HEADERS, WINHTTP_QUERY_USER_AGENT,
+        },
     },
 };
 
-use crate::{CONFIGURATION, UPSERT_USER_ALL_API_ENCRYPTED};
+use crate::{
+    types::tachi::{Import, ImportDocument, ImportPollStatus, TachiResponse, ImportResponse},
+    CONFIGURATION, TACHI_IMPORT_URL, UPSERT_USER_ALL_API_ENCRYPTED,
+};
 
 type Aes256CbcDec = cbc::Decryptor<aes::Aes256>;
 
@@ -53,17 +59,6 @@ where
     .map_err(|err| anyhow::anyhow!("Could not reach Tachi API: {:#}", err))?;
 
     Ok(response)
-}
-
-pub fn call_tachi<T>(method: impl AsRef<str>, url: impl AsRef<str>, body: Option<T>) -> Result<()>
-where
-    T: Serialize + Debug,
-{
-    let response = request(method, url, body)?;
-    let response: serde_json::Value = response.into_json()?;
-    debug!("Tachi API response: {:#?}", response);
-
-    Ok(())
 }
 
 pub fn request_tachi<T, R>(
@@ -127,6 +122,58 @@ pub fn read_hinternet_url(handle: HINTERNET) -> Result<String> {
 
     let ec = unsafe { GetLastError() };
     Err(anyhow!("Could not get URL from HINTERNET handle: {ec}"))
+}
+
+pub fn read_hinternet_user_agent(handle: HINTERNET) -> Result<String> {
+    let mut buf_length = 255;
+    let mut buffer = [0u16; 255];
+    let result = unsafe {
+        WinHttpQueryHeaders(
+            handle,
+            WINHTTP_QUERY_USER_AGENT | WINHTTP_QUERY_FLAG_REQUEST_HEADERS,
+            ptr::null(),
+            buffer.as_mut_ptr() as *mut c_void,
+            &mut buf_length,
+            ptr::null_mut(),
+        )
+    };
+
+    if result == TRUE {
+        let user_agent_str = U16CString::from_vec_truncate(&buffer[..buf_length as usize]);
+        return user_agent_str
+            .to_string()
+            .map_err(|err| anyhow!("Could not decode wide string: {:#}", err));
+    }
+
+    let ec = unsafe { GetLastError() };
+    if ec == ERROR_INSUFFICIENT_BUFFER {
+        let mut buffer = vec![0u16; buf_length as usize];
+        let result = unsafe {
+            WinHttpQueryHeaders(
+                handle,
+                WINHTTP_QUERY_USER_AGENT | WINHTTP_QUERY_FLAG_REQUEST_HEADERS,
+                ptr::null(),
+                buffer.as_mut_ptr() as *mut c_void,
+                &mut buf_length,
+                ptr::null_mut(),
+            )
+        };
+
+        if result != TRUE {
+            let ec = unsafe { GetLastError() };
+            return Err(anyhow!("Could not get URL from HINTERNET handle: {ec}"));
+        }
+
+        let user_agent_str = U16CString::from_vec_truncate(&buffer[..buf_length as usize]);
+        return user_agent_str
+            .to_string()
+            .map_err(|err| anyhow!("Could not decode wide string: {:#}", err));
+    }
+
+    let ec = unsafe { GetLastError() };
+    Err(anyhow!(
+        "Could not get User-Agent from HINTERNET handle: {ec}"
+    ))
 }
 
 pub fn read_slice(buf: *const u8, len: usize) -> Result<Vec<u8>> {
@@ -204,6 +251,84 @@ pub fn decrypt_aes256_cbc(
     let cipher = Aes256CbcDec::new_from_slices(key.as_ref(), iv.as_ref())?;
     Ok(cipher
         .decrypt_padded_mut::<Pkcs7>(body)
-        .map_err(|err| anyhow!("{:#}", err))?
+        .map_err(|err| anyhow!(err))?
         .to_owned())
+}
+
+pub fn log_import(description: &str, import: ImportDocument) {
+    info!(
+        "{description} {} scores, {} sessions, {} errors",
+        import.score_ids.len(),
+        import.created_sessions.len(),
+        import.errors.len()
+    );
+
+    for err in import.errors {
+        error!("{}: {}", err.error_type, err.message);
+    }
+}
+
+/// Executes a DIRECT-MANUAL import and logs some information on success.
+///
+/// ## Important
+/// This function blocks until import has fully finished! It is best to call this in a separate thread.
+pub fn execute_tachi_import(import: Import) -> Result<()> {
+    let resp: TachiResponse<ImportResponse> =
+        match request_tachi("POST", TACHI_IMPORT_URL.as_str(), Some(import)) {
+            Err(err) => {
+                return Err(anyhow!("Could not send scores to Tachi: {:#}", err));
+            }
+            Ok(resp) => resp,
+        };
+
+    let (body, description) = match resp {
+        TachiResponse::Err(err) => {
+            return Err(anyhow!(
+                "Tachi API returned an error: {:#}",
+                err.description
+            ));
+        }
+        TachiResponse::Ok(resp) => (resp.body, resp.description),
+    };
+
+    let poll_url = match body {
+        ImportResponse::Queued { url, import_id: _ } => {
+            info!("Queued import for processing. Status URL: {}", url);
+            url
+        }
+        ImportResponse::Finished(import) => {
+            log_import(&description, import);
+            return Ok(());
+        }
+    };
+
+    loop {
+        let resp: TachiResponse<ImportPollStatus> =
+            match request_tachi("GET", &poll_url, None::<()>) {
+                Ok(resp) => resp,
+                Err(err) => {
+                    error!("Could not poll import status: {:#}", err);
+                    break;
+                }
+            };
+
+        let (body, description) = match resp {
+            TachiResponse::Ok(resp) => (resp.body, resp.description),
+            TachiResponse::Err(err) => {
+                return Err(anyhow!("Tachi API returned an error: {}", err.description));
+            }
+        };
+
+        match body {
+            ImportPollStatus::Completed { import } => {
+                log_import(&description, import);
+                return Ok(());
+            }
+            _ => {}
+        }
+
+        std::thread::sleep(std::time::Duration::from_secs(1));
+    }
+
+    Ok(())
 }

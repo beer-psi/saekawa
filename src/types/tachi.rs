@@ -1,9 +1,118 @@
 use anyhow::Result;
 use chrono::{FixedOffset, NaiveDateTime, TimeZone};
 use num_enum::TryFromPrimitive;
-use serde::{Deserialize, Serialize};
+use serde::{de, Deserialize, Deserializer, Serialize};
+use serde_json::{Map, Value};
 
 use super::game::UserPlaylog;
+
+#[derive(Debug, Clone)]
+pub enum TachiResponse<T> {
+    Ok(TachiSuccessResponse<T>),
+    Err(TachiErrorResponse),
+}
+
+impl<'de, T> Deserialize<'de> for TachiResponse<T>
+where
+    T: Deserialize<'de>,
+{
+    fn deserialize<D>(deserializer: D) -> Result<TachiResponse<T>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let mut map = Map::deserialize(deserializer)?;
+
+        let success = map
+            .remove("success")
+            .ok_or_else(|| de::Error::missing_field("success"))
+            .map(Deserialize::deserialize)?
+            .map_err(de::Error::custom)?;
+        let rest = Value::Object(map);
+
+        if success {
+            TachiSuccessResponse::deserialize(rest)
+                .map(TachiResponse::Ok)
+                .map_err(de::Error::custom)
+        } else {
+            TachiErrorResponse::deserialize(rest)
+                .map(TachiResponse::Err)
+                .map_err(de::Error::custom)
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TachiSuccessResponse<T> {
+    pub description: String,
+    pub body: T,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TachiErrorResponse {
+    pub description: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct StatusCheck {
+    pub permissions: Vec<String>,
+    pub whoami: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ImportResponse {
+    Queued {
+        url: String,
+
+        #[serde(rename = "importID")]
+        import_id: String,
+    },
+    Finished(ImportDocument),
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ImportDocument {
+    #[serde(rename = "scoreIDs")]
+    pub score_ids: Vec<String>,
+
+    pub errors: Vec<ImportErrContent>,
+
+    #[serde(rename = "createdSessions")]
+    pub created_sessions: Vec<SessionInfoReturn>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ImportErrContent {
+    #[serde(rename = "type")]
+    pub error_type: String,
+
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SessionInfoReturn {
+    #[serde(rename = "type")]
+    pub session_type: String,
+
+    #[serde(rename = "sessionID")]
+    pub session_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "importStatus")]
+pub enum ImportPollStatus {
+    #[serde(rename = "ongoing")]
+    Ongoing { progress: ImportProgress },
+
+    #[serde(rename = "completed")]
+    Completed { import: ImportDocument },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ImportProgress {
+    pub description: String,
+    pub value: i32,
+}
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Import {

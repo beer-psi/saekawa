@@ -17,11 +17,18 @@ whitelist = []
 
 [crypto]
 # Since CRYSTAL+, the game employs network encryption. If you do not wish to
-# patch your game to disable encryption, you will need to fill in these values.
+# patch out encryption from your game, you will need to fill in these values.
 #
 # All values are in hex strings.
 key = ""
 iv = ""
+
+# Salt for deriving hashed API endpoint names. Not necessary on PARADISE LOST
+# and older. For CHUNITHM NEW and later versions, this must be set if encryption
+# is not patched out, otherwise the hook will be active but doing nothing, since 
+# it cannot recognize the score upload endpoint.
+#
+# This must also be a hex string.
 salt = ""
 
 # Number of PBKDF2 iterations to hash the endpoint URL. Set to 70 for CHUNITHM SUN
