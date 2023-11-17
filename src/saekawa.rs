@@ -173,7 +173,7 @@ fn winhttpwritedata_hook(
             }
         };
 
-    debug!("raw request body: {:?}", raw_request_body);
+    debug!("raw request body: {}", faster_hex::hex_string(&raw_request_body));
 
     // Rest of the processing can be safely moved to a different thread, since we're not dealing
     // with the hooked function's stuff anymore, probably.
