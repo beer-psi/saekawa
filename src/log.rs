@@ -1,7 +1,10 @@
+use std::ffi::CString;
 use std::fmt;
 use std::fs::File;
 use std::io::Write;
 use std::sync::atomic::{AtomicUsize, Ordering};
+
+use winapi::um::debugapi::OutputDebugStringA;
 
 #[derive(Debug)]
 pub struct Logger {
@@ -18,7 +21,10 @@ impl Logger {
 
 impl Write for Logger {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        // Ignore the result of the write to stdout, since it's not really important
+        if let Ok(c_str) = CString::new(buf) {
+            unsafe { OutputDebugStringA(c_str.as_ptr()); }
+        }
+
         let _ = std::io::stdout().write(buf);
         self.file.write(buf)
     }

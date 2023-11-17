@@ -10,7 +10,6 @@ use pbkdf2::pbkdf2_hmac_array;
 use sha1::Sha1;
 use url::Url;
 use winapi::shared::minwindef::{BOOL, DWORD, HINSTANCE, LPVOID, TRUE};
-use winapi::um::consoleapi::AllocConsole;
 use winapi::um::winnt::{DLL_PROCESS_ATTACH, DLL_PROCESS_DETACH};
 
 use crate::configuration::Configuration;
@@ -107,10 +106,6 @@ fn init_logger() {
 extern "system" fn DllMain(dll_module: HINSTANCE, call_reason: DWORD, reserved: LPVOID) -> BOOL {
     match call_reason {
         DLL_PROCESS_ATTACH => {
-            unsafe {
-                AllocConsole();
-            }
-
             init_logger();
 
             if let Err(err) = hook_init() {

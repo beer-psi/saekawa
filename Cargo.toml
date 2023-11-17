@@ -36,4 +36,4 @@ sha1 = "0.10.6"
 ureq = { version = "2.8.0", features = ["json"] }
 url = "2.4.1"
 widestring = "1.0.2"
-winapi = { version = "0.3.9", features = ["winhttp", "minwindef", "consoleapi"] }
+winapi = { version = "0.3.9", features = ["winhttp", "minwindef", "debugapi"] }
