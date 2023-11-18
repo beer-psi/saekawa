@@ -1,18 +1,19 @@
 mod configuration;
+mod handlers;
 mod helpers;
+mod icf;
 mod log;
 mod saekawa;
 mod types;
 
-use ::log::{debug, error};
+use ::log::error;
 use lazy_static::lazy_static;
-use pbkdf2::pbkdf2_hmac_array;
-use sha1::Sha1;
 use url::Url;
 use winapi::shared::minwindef::{BOOL, DWORD, HINSTANCE, LPVOID, TRUE};
 use winapi::um::winnt::{DLL_PROCESS_ATTACH, DLL_PROCESS_DETACH};
 
 use crate::configuration::Configuration;
+use crate::helpers::hash_endpoint;
 use crate::log::Logger;
 use crate::saekawa::{hook_init, hook_release};
 
@@ -46,23 +47,9 @@ lazy_static! {
 
         result.unwrap().to_string()
     };
-    pub static ref UPSERT_USER_ALL_API_ENCRYPTED: Option<String> = {
-        if CONFIGURATION.crypto.salt.is_empty() {
-            return None;
-        }
-
-        let key_bytes = pbkdf2_hmac_array::<Sha1, 16>(
-            b"UpsertUserAllApi",
-            &CONFIGURATION.crypto.salt,
-            CONFIGURATION.crypto.iterations,
-        );
-
-        let key = faster_hex::hex_string(&key_bytes);
-
-        debug!("Running with encryption support: UpsertUserAllApi maps to {key}");
-
-        Some(key)
-    };
+    pub static ref UPSERT_USER_ALL_API_ENCRYPTED: Option<String> =
+        hash_endpoint("UpsertUserAllApi");
+    pub static ref GET_USER_MUSIC_API_ENCRYPTED: Option<String> = hash_endpoint("GetUserMusicApi");
 }
 
 fn init_logger() {

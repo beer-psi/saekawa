@@ -3,15 +3,23 @@
 enable = true
 # Whether the hook should export your class medals and emblems or not.
 export_class = true
+# Whether the hook should export PBs. This should be used as a last resort, if
+# you cannot import scores from your network, since this provides less data
+# and sends only one pre-joined score per chart. Will only work once every session; you'll
+# need to restart the game to do it again.
+export_pbs = false
 # Whether FAILED should override FULL COMBO and ALL JUSTICE.
 fail_over_lamp = false
 # Timeout for web requests, in milliseconds
 timeout = 3000
 
 [cards]
+# **DOES NOT WORK FOR WHITELISTING PBS!!**
+#
 # Access codes that should be whitelisted
 # If this is empty, all cards will be whitelisted
 # There should be no whitespace between the digits
+#
 # example: whitelist = ["00001111222233334444"]
 whitelist = []
 

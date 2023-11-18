@@ -1,43 +1,128 @@
-use std::ffi::CString;
+use std::{
+    ffi::CString,
+    fmt::Debug,
+    fs::File,
+    io::Read,
+    path::Path,
+    sync::atomic::{AtomicBool, AtomicU16, Ordering},
+};
 
 use ::log::{debug, error, info};
 use anyhow::{anyhow, Result};
+use log::warn;
 use retour::static_detour;
+use serde::de::DeserializeOwned;
+use widestring::U16CString;
 use winapi::{
     ctypes::c_void,
-    shared::minwindef::{__some_function, BOOL, DWORD, LPCVOID, LPDWORD},
+    shared::minwindef::{__some_function, BOOL, DWORD, FALSE, LPCVOID, LPDWORD, LPVOID, MAX_PATH},
     um::{
         errhandlingapi::GetLastError,
         libloaderapi::{GetModuleHandleA, GetProcAddress},
+        winbase::GetPrivateProfileStringW,
         winhttp::HINTERNET,
     },
 };
 
 use crate::{
+    configuration::{Configuration, GeneralConfiguration},
+    handlers::score_handler,
     helpers::{
-        decrypt_aes256_cbc, execute_tachi_import, is_encrypted_endpoint,
-        is_upsert_user_all_endpoint, read_hinternet_url, read_hinternet_user_agent,
-        read_maybe_compressed_buffer, read_slice, request_tachi,
+        decrypt_aes256_cbc, is_encrypted_endpoint, is_endpoint, read_hinternet_url,
+        read_hinternet_user_agent, read_maybe_compressed_buffer, read_slice, request_tachi,
     },
+    icf::{decode_icf, IcfData},
     types::{
-        game::UpsertUserAllRequest,
-        tachi::{
-            ClassEmblem, Difficulty, Import, ImportClasses, ImportScore, StatusCheck, TachiResponse,
-        },
+        game::{UpsertUserAllRequest, UserMusicResponse},
+        tachi::{StatusCheck, TachiResponse, ToTachiImport},
     },
-    CONFIGURATION, TACHI_STATUS_URL,
+    CONFIGURATION, GET_USER_MUSIC_API_ENCRYPTED, TACHI_STATUS_URL, UPSERT_USER_ALL_API_ENCRYPTED,
 };
 
+pub static GAME_MAJOR_VERSION: AtomicU16 = AtomicU16::new(0);
+pub static PB_IMPORTED: AtomicBool = AtomicBool::new(true);
+
 type WinHttpWriteDataFunc = unsafe extern "system" fn(HINTERNET, LPCVOID, DWORD, LPDWORD) -> BOOL;
+type WinHttpReadDataFunc = unsafe extern "system" fn(HINTERNET, LPVOID, DWORD, LPDWORD) -> BOOL;
 
 static_detour! {
     static DetourWriteData: unsafe extern "system" fn (HINTERNET, LPCVOID, DWORD, LPDWORD) -> BOOL;
+    static DetourReadData: unsafe extern "system" fn(HINTERNET, LPVOID, DWORD, LPDWORD) -> BOOL;
 }
 
 pub fn hook_init() -> Result<()> {
     if !CONFIGURATION.general.enable {
         return Ok(());
     }
+
+    if CONFIGURATION.general.export_pbs {
+        warn!("===============================================================================");
+        warn!("Exporting PBs is enabled. This should only be used once to sync up your scores!");
+        warn!("Leaving it on can make your profile messy! This will be automatically be turned off after exporting is finished.");
+        warn!("You can check when it's done by searching for the message 'Submitting x scores from user ID xxxxx'.");
+        warn!("===============================================================================");
+
+        PB_IMPORTED.store(false, Ordering::SeqCst);
+    }
+
+    debug!("Retrieving AMFS path from segatools.ini");
+
+    let mut buf = [0u16; MAX_PATH];
+    let amfs_cfg = unsafe {
+        let sz = GetPrivateProfileStringW(
+            U16CString::from_str_unchecked("vfs").as_ptr(),
+            U16CString::from_str_unchecked("amfs").as_ptr(),
+            U16CString::new().as_ptr(),
+            buf.as_mut_ptr(),
+            MAX_PATH as u32,
+            U16CString::from_str(".\\segatools.ini").unwrap().as_ptr(),
+        );
+
+        if sz == 0 {
+            let ec = GetLastError();
+            return Err(anyhow!(
+                "AMFS path not specified in segatools.ini, error code {ec}"
+            ));
+        }
+
+        match U16CString::from_ptr(buf.as_ptr(), sz as usize) {
+            Ok(data) => data.to_string_lossy(),
+            Err(err) => {
+                return Err(anyhow!(
+                    "could not read AMFS path from segatools.ini: {:#}",
+                    err
+                ));
+            }
+        }
+    };
+    let amfs_path = Path::new(&amfs_cfg);
+    let icf1_path = amfs_path.join("ICF1");
+
+    if !icf1_path.exists() {
+        return Err(anyhow!("Could not find ICF1 inside AMFS path. You will probably not be able to network without this file, so this hook will also be disabled."));
+    }
+
+    debug!("Reading ICF1 located at {:?}", icf1_path);
+
+    let mut icf1_buf = {
+        let mut icf1_file = File::open(icf1_path)?;
+        let mut icf1_buf = Vec::new();
+        icf1_file.read_to_end(&mut icf1_buf)?;
+        icf1_buf
+    };
+    let icf = decode_icf(&mut icf1_buf).map_err(|err| anyhow!("Reading ICF failed: {:#}", err))?;
+
+    for entry in icf {
+        match entry {
+            IcfData::App(app) => {
+                info!("Running on {} {}", app.id, app.version);
+                GAME_MAJOR_VERSION.store(app.version.major, Ordering::Relaxed);
+            }
+            _ => {}
+        }
+    }
+
+    debug!("Pinging Tachi API for status check and token verification");
 
     let resp: TachiResponse<StatusCheck> =
         request_tachi("GET", TACHI_STATUS_URL.as_str(), None::<()>)?;
@@ -64,15 +149,37 @@ pub fn hook_init() -> Result<()> {
 
     info!("Logged in to Tachi with userID {user_id}");
 
+    debug!("Acquring addresses");
+
     let winhttpwritedata = unsafe {
         let addr = get_proc_address("winhttp.dll", "WinHttpWriteData")
             .map_err(|err| anyhow!("{:#}", err))?;
+
+        debug!("WinHttpWriteData: winhttp.dll!{:p}", addr);
+
         std::mem::transmute::<_, WinHttpWriteDataFunc>(addr)
     };
 
+    let winhttpreaddata = unsafe {
+        let addr = get_proc_address("winhttp.dll", "WinHttpReadData")
+            .map_err(|err| anyhow!("{:#}", err))?;
+
+        debug!("WinHttpReadData: winhttp.dll!{:p}", addr);
+
+        std::mem::transmute::<_, WinHttpReadDataFunc>(addr)
+    };
+
+    debug!("Initializing detours");
+
     unsafe {
+        debug!("Initializing WinHttpWriteData detour");
         DetourWriteData
-            .initialize(winhttpwritedata, winhttpwritedata_hook)?
+            .initialize(winhttpwritedata, winhttpwritedata_hook_wrapper)?
+            .enable()?;
+
+        debug!("Initializing WinHttpReadData detour");
+        DetourReadData
+            .initialize(winhttpreaddata, winhttpreaddata_hook_wrapper)?
             .enable()?;
     };
 
@@ -86,12 +193,79 @@ pub fn hook_release() -> Result<()> {
         return Ok(());
     }
 
-    unsafe { DetourWriteData.disable()? };
+    if DetourWriteData.is_enabled() {
+        unsafe { DetourWriteData.disable()? };
+    }
+
+    if DetourReadData.is_enabled() {
+        unsafe { DetourReadData.disable()? };
+    }
 
     Ok(())
 }
 
-fn winhttpwritedata_hook(
+fn winhttpreaddata_hook_wrapper(
+    h_request: HINTERNET,
+    lp_buffer: LPVOID,
+    dw_number_of_bytes_to_read: DWORD,
+    lpdw_number_of_bytes_read: LPDWORD,
+) -> BOOL {
+    debug!("hit winhttpreaddata");
+
+    let result = unsafe {
+        DetourReadData.call(
+            h_request,
+            lp_buffer,
+            dw_number_of_bytes_to_read,
+            lpdw_number_of_bytes_read,
+        )
+    };
+
+    if result == FALSE {
+        let ec = unsafe { GetLastError() };
+        error!("Calling original WinHttpReadData function failed: {ec}");
+        return result;
+    }
+
+    let pb_imported = PB_IMPORTED.load(Ordering::SeqCst);
+    if cfg!(not(debug_assertions)) && pb_imported {
+        return result;
+    }
+
+    if let Err(err) = winhttprwdata_hook::<UserMusicResponse>(
+        h_request,
+        lp_buffer,
+        dw_number_of_bytes_to_read,
+        "GetUserMusicApi",
+        &GET_USER_MUSIC_API_ENCRYPTED,
+        move |_| {
+            if pb_imported {
+                return false;
+            }
+
+            PB_IMPORTED.store(true, Ordering::Relaxed);
+            if let Err(err) = Configuration::update(Configuration {
+                general: GeneralConfiguration {
+                    export_pbs: false,
+                    ..CONFIGURATION.general
+                },
+                cards: CONFIGURATION.cards.clone(),
+                crypto: CONFIGURATION.crypto.clone(),
+                tachi: CONFIGURATION.tachi.clone(),
+            }) {
+                error!("Could not update configuration to disable exporting PBs: {err:?}");
+            }
+
+            true
+        },
+    ) {
+        error!("{err:?}");
+    }
+
+    result
+}
+
+fn winhttpwritedata_hook_wrapper(
     h_request: HINTERNET,
     lp_buffer: LPCVOID,
     dw_number_of_bytes_to_write: DWORD,
@@ -99,48 +273,62 @@ fn winhttpwritedata_hook(
 ) -> BOOL {
     debug!("hit winhttpwritedata");
 
-    let orig = || unsafe {
+    if let Err(err) = winhttprwdata_hook::<UpsertUserAllRequest>(
+        h_request,
+        lp_buffer,
+        dw_number_of_bytes_to_write,
+        "UpsertUserAllApi",
+        &UPSERT_USER_ALL_API_ENCRYPTED,
+        |upsert_req| {
+            let user_data = &upsert_req.upsert_user_all.user_data[0];
+            let access_code = &user_data.access_code;
+            if !CONFIGURATION.cards.whitelist.is_empty()
+                && !CONFIGURATION.cards.whitelist.contains(access_code)
+            {
+                info!("Card {access_code} is not whitelisted, skipping score submission");
+                return false;
+            }
+
+            true
+        },
+    ) {
+        error!("{err:?}");
+    }
+
+    unsafe {
         DetourWriteData.call(
             h_request,
             lp_buffer,
             dw_number_of_bytes_to_write,
             lpdw_number_of_bytes_written,
         )
-    };
+    }
+}
 
-    let url = match read_hinternet_url(h_request) {
-        Ok(url) => url,
-        Err(err) => {
-            error!("There was an error reading the request URL: {:#}", err);
-            return orig();
-        }
-    };
-    let user_agent = match read_hinternet_user_agent(h_request) {
-        Ok(ua) => ua,
-        Err(err) => {
-            error!(
-                "There was an error reading the request's User-Agent: {:#}",
-                err
-            );
-            return orig();
-        }
-    };
-    debug!("request from user-agent {user_agent} with URL: {url}");
+/// Common hook for WinHttpWriteData/WinHttpReadData. The flow is similar for both
+/// hooks:
+/// - Read URL and User-Agent from the handle
+/// - Extract the API method from the URL, and exit if it's not the method we're
+/// looking for
+/// - Determine if the API is encrypted, and exit if it is and we don't have keys
+/// - Parse the body and convert it to Tachi's BATCH-MANUAL
+/// - Submit it off to Tachi, if our guard function (which takes the parsed body) allows so.
+fn winhttprwdata_hook<'a, T: Debug + DeserializeOwned + ToTachiImport + 'static>(
+    handle: HINTERNET,
+    buffer: *const c_void,
+    bufsz: DWORD,
+    unencrypted_endpoint: &str,
+    encrypted_endpoint: &Option<String>,
+    guard_fn: impl Fn(&T) -> bool + Send + 'static,
+) -> Result<()> {
+    let url = read_hinternet_url(handle)?;
+    let user_agent = read_hinternet_user_agent(handle)?;
+    debug!("user-agent {user_agent}, URL: {url}");
 
-    // Quick explanation for this rodeo:
-    //
-    // Since CRYSTAL+, requests are encrypted with a hardcoded key/IV pair, and endpoints
-    // are supposed to be HMAC'd with a salt, and then stored in the User-Agent in the format
-    // of `{hashed_endpoint}#{numbers}`, as well as mangling the URL.
-    //
-    // However, there was an oversight in the implementation for versions PARADISE LOST
-    // and older: the endpoint stored in the User-Agent was not hashed. A mangled URL
-    // still indicates encryption was used, however, so you still need to provide key/IV. Only
-    // the salt is not needed.
-    let Some(maybe_endpoint) = url.split('/').last() else {
-        error!("Could not get name of endpoint");
-        return orig();
-    };
+    let maybe_endpoint = url
+        .split('/')
+        .last()
+        .ok_or(anyhow!("Could not extract last part of a split URL"))?;
 
     let is_encrypted = is_encrypted_endpoint(maybe_endpoint);
 
@@ -148,53 +336,50 @@ fn winhttpwritedata_hook(
         user_agent
             .split('#')
             .next()
-            .expect("there should be at least one item in the split")
+            .ok_or(anyhow!("there should be at least one item in the split"))?
     } else {
         maybe_endpoint
     };
 
+    let is_correct_endpoint = is_endpoint(endpoint, unencrypted_endpoint, encrypted_endpoint);
+    if cfg!(not(debug_assertions)) && !is_correct_endpoint {
+        return Ok(());
+    }
+
     if is_encrypted && (CONFIGURATION.crypto.key.is_empty() || CONFIGURATION.crypto.iv.is_empty()) {
-        error!("Communications with the server is encrypted, but no keys were provided. Fill in the keys by editing 'saekawa.toml'.");
-        return orig();
+        return Err(anyhow!("Communications with the server is encrypted, but no keys were provided. Fill in the keys by editing 'saekawa.toml'."));
     }
 
-    let is_upsert_user_all = is_upsert_user_all_endpoint(endpoint);
-    // Exit early if release mode and the endpoint is not what we're looking for
-    if cfg!(not(debug_assertions)) && !is_upsert_user_all {
-        return orig();
-    }
+    let mut raw_body = match read_slice(buffer as *const u8, bufsz as usize) {
+        Ok(data) => data,
+        Err(err) => {
+            return Err(anyhow!(
+                "There was an error reading the response body: {:#}",
+                err
+            ));
+        }
+    };
 
-    let mut raw_request_body =
-        match read_slice(lp_buffer as *const u8, dw_number_of_bytes_to_write as usize) {
-            Ok(data) => data,
-            Err(err) => {
-                error!("There was an error reading the request body: {:#}", err);
-                return orig();
-            }
-        };
+    debug!("raw body: {}", faster_hex::hex_string(&raw_body));
 
-    debug!("raw request body: {}", faster_hex::hex_string(&raw_request_body));
-
-    // Rest of the processing can be safely moved to a different thread, since we're not dealing
-    // with the hooked function's stuff anymore, probably.
     std::thread::spawn(move || {
-        let request_body_compressed = if is_encrypted {
+        let compressed_body = if is_encrypted {
             match decrypt_aes256_cbc(
-                &mut raw_request_body,
+                &mut raw_body,
                 &CONFIGURATION.crypto.key,
                 &CONFIGURATION.crypto.iv,
             ) {
                 Ok(res) => res,
                 Err(err) => {
-                    error!("Could not decrypt request: {:#}", err);
+                    error!("Could not decrypt response: {:#}", err);
                     return;
                 }
             }
         } else {
-            raw_request_body
+            raw_body
         };
 
-        let request_body = match read_maybe_compressed_buffer(&request_body_compressed[..]) {
+        let body = match read_maybe_compressed_buffer(&compressed_body[..]) {
             Ok(data) => data,
             Err(err) => {
                 error!("There was an error decoding the request body: {:#}", err);
@@ -202,90 +387,17 @@ fn winhttpwritedata_hook(
             }
         };
 
-        debug!("decoded request body: {request_body}");
+        debug!("decoded response body: {body}");
 
-        // Reached in debug mode
-        if !is_upsert_user_all {
+        // Hit in debug build
+        if !is_correct_endpoint {
             return;
         }
 
-        let upsert_req = match serde_json::from_str::<UpsertUserAllRequest>(&request_body) {
-            Ok(req) => req,
-            Err(err) => {
-                error!("Could not parse request body: {:#}", err);
-                return;
-            }
-        };
-
-        debug!("parsed request body: {:#?}", upsert_req);
-
-        let user_data = &upsert_req.upsert_user_all.user_data[0];
-        let access_code = &user_data.access_code;
-        if !CONFIGURATION.cards.whitelist.is_empty()
-            && !CONFIGURATION.cards.whitelist.contains(access_code)
-        {
-            info!("Card {access_code} is not whitelisted, skipping score submission");
-            return;
-        }
-
-        let classes = if CONFIGURATION.general.export_class {
-            Some(ImportClasses {
-                dan: ClassEmblem::try_from(user_data.class_emblem_medal).ok(),
-                emblem: ClassEmblem::try_from(user_data.class_emblem_base).ok(),
-            })
-        } else {
-            None
-        };
-
-        let scores = upsert_req
-            .upsert_user_all
-            .user_playlog_list
-            .into_iter()
-            .filter_map(|playlog| {
-                let result =
-                    ImportScore::try_from_playlog(playlog, CONFIGURATION.general.fail_over_lamp);
-                if result
-                    .as_ref()
-                    .is_ok_and(|v| v.difficulty != Difficulty::WorldsEnd)
-                {
-                    result.ok()
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<ImportScore>>();
-
-        if scores.is_empty() {
-            if classes.is_none() {
-                return;
-            }
-
-            if classes
-                .clone()
-                .is_some_and(|v| v.dan.is_none() && v.emblem.is_none())
-            {
-                return;
-            }
-        }
-
-        let import = Import {
-            classes,
-            scores,
-            ..Default::default()
-        };
-
-        info!(
-            "Submitting {} scores from access code {}",
-            import.scores.len(),
-            user_data.access_code
-        );
-
-        if let Err(err) = execute_tachi_import(import) {
-            error!("{:#}", err);
-        }
+        score_handler::<T>(body, guard_fn)
     });
 
-    orig()
+    Ok(())
 }
 
 fn get_proc_address(module: &str, function: &str) -> Result<*mut __some_function> {

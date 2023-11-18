@@ -4,7 +4,7 @@ use num_enum::TryFromPrimitive;
 use serde::{de, Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value};
 
-use super::game::UserPlaylog;
+use super::game::{UpsertUserAllRequest, UserMusicDetail, UserMusicResponse, UserPlaylog};
 
 #[derive(Debug, Clone)]
 pub enum TachiResponse<T> {
@@ -178,9 +178,15 @@ pub struct ImportScore {
     pub match_type: String,
     pub identifier: String,
     pub difficulty: Difficulty,
-    pub time_achieved: u128,
-    pub judgements: Judgements,
-    pub optional: OptionalMetrics,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub time_achieved: Option<u128>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub judgements: Option<Judgements>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub optional: Option<OptionalMetrics>,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, TryFromPrimitive)]
@@ -239,7 +245,11 @@ pub struct OptionalMetrics {
 }
 
 impl ImportScore {
-    pub fn try_from_playlog(p: UserPlaylog, fail_over_lamp: bool) -> Result<ImportScore> {
+    pub fn try_from_playlog(
+        p: &UserPlaylog,
+        major_version: u16,
+        fail_over_lamp: bool,
+    ) -> Result<ImportScore> {
         let lamp = if !p.is_clear && fail_over_lamp {
             TachiLamp::Failed
         } else if p.is_all_justice {
@@ -263,8 +273,7 @@ impl ImportScore {
             miss: p.judge_guilty,
         };
 
-        let rom_major_version = p.rom_version.split('.').next().unwrap_or("2");
-        let difficulty = if rom_major_version == "1" && p.level == 4 {
+        let difficulty = if major_version == 1 && p.level == 4 {
             Difficulty::WorldsEnd
         } else {
             Difficulty::try_from(p.level)?
@@ -279,13 +288,148 @@ impl ImportScore {
             score: p.score,
             lamp,
             match_type: "inGameID".to_string(),
-            identifier: p.music_id,
+            identifier: p.music_id.clone(),
             difficulty,
-            time_achieved: jst_time.timestamp_millis() as u128,
-            judgements,
-            optional: OptionalMetrics {
+            time_achieved: Some(jst_time.timestamp_millis() as u128),
+            judgements: Some(judgements),
+            optional: Some(OptionalMetrics {
                 max_combo: p.max_combo,
-            },
+            }),
         })
+    }
+
+    fn try_from_music_detail(
+        d: &UserMusicDetail,
+        major_version: u16,
+        fail_over_lamp: bool,
+    ) -> Result<ImportScore> {
+        let lamp = if !d.is_success && fail_over_lamp {
+            TachiLamp::Failed
+        } else if d.is_all_justice {
+            TachiLamp::AllJustice
+        } else if d.is_full_combo {
+            TachiLamp::FullCombo
+        } else if d.is_success {
+            TachiLamp::Clear
+        } else {
+            TachiLamp::Failed
+        };
+
+        let difficulty = if major_version == 1 && d.level == 4 {
+            Difficulty::WorldsEnd
+        } else {
+            Difficulty::try_from(d.level)?
+        };
+
+        Ok(ImportScore {
+            score: d.score_max,
+            lamp,
+            match_type: "inGameID".to_string(),
+            identifier: d.music_id.to_string(),
+            difficulty,
+            time_achieved: None,
+            judgements: None,
+            optional: None,
+        })
+    }
+}
+
+pub trait ToTachiImport {
+    fn displayed_id(&self) -> &str;
+    fn displayed_id_type(&self) -> &str;
+    fn to_tachi_import(
+        &self,
+        major_version: u16,
+        export_class: bool,
+        fail_over_lamp: bool,
+    ) -> Import;
+}
+
+impl ToTachiImport for UserMusicResponse {
+    fn displayed_id(&self) -> &str {
+        &self.user_id
+    }
+
+    fn displayed_id_type(&self) -> &str {
+        "user ID"
+    }
+
+    fn to_tachi_import(&self, major_version: u16, _: bool, fail_over_lamp: bool) -> Import {
+        let scores = self
+            .user_music_list
+            .iter()
+            .flat_map(|item| {
+                item.user_music_detail_list.iter().filter_map(|d| {
+                    let result =
+                        ImportScore::try_from_music_detail(d, major_version, fail_over_lamp);
+                    if result
+                        .as_ref()
+                        .is_ok_and(|v| v.difficulty != Difficulty::WorldsEnd)
+                    {
+                        result.ok()
+                    } else {
+                        None
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+
+        Import {
+            scores,
+            ..Default::default()
+        }
+    }
+}
+
+impl ToTachiImport for UpsertUserAllRequest {
+    fn displayed_id(&self) -> &str {
+        let user_data = &self.upsert_user_all.user_data[0];
+
+        &user_data.access_code
+    }
+
+    fn displayed_id_type(&self) -> &str {
+        "access code"
+    }
+
+    fn to_tachi_import(
+        &self,
+        major_version: u16,
+        export_class: bool,
+        fail_over_lamp: bool,
+    ) -> Import {
+        let user_data = &self.upsert_user_all.user_data[0];
+
+        let classes = if export_class {
+            Some(ImportClasses {
+                dan: ClassEmblem::try_from(user_data.class_emblem_medal).ok(),
+                emblem: ClassEmblem::try_from(user_data.class_emblem_base).ok(),
+            })
+        } else {
+            None
+        };
+
+        let scores = self
+            .upsert_user_all
+            .user_playlog_list
+            .iter()
+            .filter_map(|playlog| {
+                let result = ImportScore::try_from_playlog(playlog, major_version, fail_over_lamp);
+                if result
+                    .as_ref()
+                    .is_ok_and(|v| v.difficulty != Difficulty::WorldsEnd)
+                {
+                    result.ok()
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<ImportScore>>();
+
+        Import {
+            classes,
+            scores,
+            ..Default::default()
+        }
     }
 }

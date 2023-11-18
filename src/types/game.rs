@@ -5,12 +5,22 @@ fn deserialize_bool<'de, D>(deserializer: D) -> Result<bool, D::Error>
 where
     D: de::Deserializer<'de>,
 {
-    let s: &str = de::Deserialize::deserialize(deserializer)?;
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum StringOrBoolean {
+        String(String),
+        Bool(bool),
+    }
+
+    let s: StringOrBoolean = de::Deserialize::deserialize(deserializer)?;
 
     match s {
-        "true" => Ok(true),
-        "false" => Ok(false),
-        _ => Err(de::Error::unknown_variant(s, &["true", "false"])),
+        StringOrBoolean::String(s) => match s.as_str() {
+            "true" => Ok(true),
+            "false" => Ok(false),
+            _ => Err(de::Error::unknown_variant(&s, &["true", "false"])),
+        },
+        StringOrBoolean::Bool(b) => Ok(b),
     }
 }
 
@@ -78,6 +88,43 @@ pub struct UserPlaylog {
 
 fn default_judge_heaven() -> u32 {
     0
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserMusicDetail {
+    #[serde(deserialize_with = "deserialize_number_from_string")]
+    pub music_id: u32,
+
+    #[serde(deserialize_with = "deserialize_number_from_string")]
+    pub level: u32,
+
+    #[serde(deserialize_with = "deserialize_number_from_string")]
+    pub score_max: u32,
+
+    #[serde(deserialize_with = "deserialize_bool")]
+    pub is_all_justice: bool,
+
+    #[serde(deserialize_with = "deserialize_bool")]
+    pub is_full_combo: bool,
+
+    #[serde(deserialize_with = "deserialize_bool")]
+    pub is_success: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserMusicItem {
+    pub length: u32,
+    pub user_music_detail_list: Vec<UserMusicDetail>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserMusicResponse {
+    pub user_id: String,
+    pub length: u32,
+    pub user_music_list: Vec<UserMusicItem>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

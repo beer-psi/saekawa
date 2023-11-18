@@ -22,7 +22,9 @@ impl Logger {
 impl Write for Logger {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         if let Ok(c_str) = CString::new(buf) {
-            unsafe { OutputDebugStringA(c_str.as_ptr()); }
+            unsafe {
+                OutputDebugStringA(c_str.as_ptr());
+            }
         }
 
         let _ = std::io::stdout().write(buf);

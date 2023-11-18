@@ -27,6 +27,11 @@ impl Configuration {
         confy::load_path("saekawa.toml")
             .map_err(|err| anyhow::anyhow!("Could not load config: {}", err))
     }
+
+    pub fn update(cfg: Configuration) -> Result<()> {
+        confy::store_path("saekawa.toml", cfg)
+            .map_err(|err| anyhow::anyhow!("Could not update config: {}", err))
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -36,6 +41,9 @@ pub struct GeneralConfiguration {
 
     #[serde(default = "default_true")]
     pub export_class: bool,
+
+    #[serde(default = "default_false")]
+    pub export_pbs: bool,
 
     #[serde(default = "default_false")]
     pub fail_over_lamp: bool,
