@@ -10,8 +10,8 @@ CHUNITHM hook to submit your scores to Tachi every credit.
 
 ### Installation
 - Put it in your game installation root directory
-- Create and edit the [config file](https://github.com/beerpiss/saekawa/blob/trunk/res/saekawa.toml) to set your API key (optional, if it doesn't exist it
-will be created automatically)
+- Create and edit the [config file](https://github.com/beerpiss/saekawa/blob/trunk/res/saekawa.toml)
+to set your API key (optional, if it doesn't exist it will be created automatically)
 - When you start the game, inject the DLL into the game process. For example,
 edit your segatools game.bat to look like the green line:
 ```diff
@@ -24,12 +24,11 @@ This hook requires the game's network communications to be decrypted, which can 
 by patching the game binary with your preferred patcher.
 
 If you choose not to patch, you will need to obtain the necessary keys and provide them
-in `saekawa.toml`.
+in the configuration file.
 
 ### Credits
-- Adam Thibert ([adamaq01](https://github.com/adamaq01)). A lot of the code was
-shamelessly lifted from his [Mikado](https://github.com/adamaq01/Mikado), a similar
-hook for SDVX.
+- Adam Thibert ([adamaq01](https://github.com/adamaq01)). A lot of the code was copied from
+[Mikado](https://github.com/adamaq01/Mikado), a similar hook for SDVX.
 
 ### License
 0BSD
