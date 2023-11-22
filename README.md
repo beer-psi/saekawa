@@ -11,7 +11,8 @@ CHUNITHM hook to submit your scores to Tachi every credit.
 ### Installation
 - Download the [latest release](https://github.com/beerpiss/saekawa/releases/latest)
 - Put it in your game installation root folder.
-- Create and edit the [config file](https://github.com/beerpiss/saekawa/blob/trunk/res/saekawa.toml),
+- Create and edit the [config file](https://github.com/beerpiss/saekawa/blob/trunk/res/saekawa.toml)
+(download a config file pre-filled with your Tachi API key [here](https://kamaitachi.xyz/client-file-flow/CXSaekawa)),
 and place it in the same folder as the DLL.
 - When you start the game, inject the DLL into the game process. For example,
 edit your segatools game.bat to look like the green line:
