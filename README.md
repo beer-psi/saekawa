@@ -23,7 +23,8 @@ edit your segatools game.bat to look like the green line:
 
 ### Caveats
 This hook requires the game's network communications to be decrypted, which can be done
-by patching the game binary with your preferred patcher.
+by patching the game binary with your preferred patcher. (if you're already running a local
+server like Aqua or ARTEMiS and had no idea encryption even existed, you're good to go)
 
 If you choose not to patch, you will need to obtain the necessary keys and provide them
 in the configuration file.
