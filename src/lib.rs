@@ -6,11 +6,18 @@ mod log;
 mod saekawa;
 mod types;
 
-use ::log::error;
+use std::ffi::c_void;
+use std::{ptr, thread};
+
+use ::log::{error, warn};
 use lazy_static::lazy_static;
 use url::Url;
-use winapi::shared::minwindef::{BOOL, DWORD, HINSTANCE, LPVOID, TRUE};
-use winapi::um::winnt::{DLL_PROCESS_ATTACH, DLL_PROCESS_DETACH};
+use winapi::shared::minwindef::{BOOL, DWORD, HINSTANCE, LPVOID, TRUE, FALSE};
+use winapi::um::errhandlingapi::GetLastError;
+use winapi::um::handleapi::{DuplicateHandle, CloseHandle};
+use winapi::um::processthreadsapi::{GetCurrentProcess, GetCurrentThread};
+use winapi::um::synchapi::WaitForSingleObject;
+use winapi::um::winnt::{DLL_PROCESS_ATTACH, DLL_PROCESS_DETACH, SYNCHRONIZE};
 
 use crate::configuration::Configuration;
 use crate::helpers::hash_endpoint;
@@ -88,6 +95,18 @@ fn init_logger() {
         .init();
 }
 
+struct ThreadHandle(*mut c_void);
+
+impl ThreadHandle {
+    pub unsafe fn wait_and_close(self, ms: u32) {
+        WaitForSingleObject(self.0, ms);
+        CloseHandle(self.0);
+    }
+}
+
+unsafe impl Send for ThreadHandle {}
+unsafe impl Sync for ThreadHandle {}
+
 #[no_mangle]
 #[allow(non_snake_case, unused_variables)]
 extern "system" fn DllMain(dll_module: HINSTANCE, call_reason: DWORD, reserved: LPVOID) -> BOOL {
@@ -95,13 +114,39 @@ extern "system" fn DllMain(dll_module: HINSTANCE, call_reason: DWORD, reserved: 
         DLL_PROCESS_ATTACH => {
             init_logger();
 
-            if let Err(err) = hook_init() {
-                error!("{:#}", err);
-            }
+            let (cur_thread, result) = unsafe {
+                let mut cur_thread = ptr::null_mut();
+                let result = DuplicateHandle(
+                    GetCurrentProcess(),
+                    GetCurrentThread(),
+                    GetCurrentProcess(),
+                    &mut cur_thread,
+                    SYNCHRONIZE,
+                    FALSE,
+                    0
+                );
+
+                if result == 0 {
+                    warn!("Failed to get current thread handle, error code: {}", GetLastError());
+                }
+
+                (ThreadHandle(cur_thread), result)
+            };
+
+            thread::spawn(move || {
+                if result != 0 {
+                    unsafe { cur_thread.wait_and_close(100) };
+                }
+    
+                if let Err(err) = hook_init() {
+                    error!("Failed to initialize hook: {:#}", err);
+                }
+            });
         }
         DLL_PROCESS_DETACH => {
             if let Err(err) = hook_release() {
                 error!("{:#}", err);
+                return FALSE;
             }
         }
         _ => {}
