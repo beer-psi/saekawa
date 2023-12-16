@@ -10,6 +10,7 @@ where
     enum StringOrBoolean {
         String(String),
         Bool(bool),
+        Number(i32),
     }
 
     let s: StringOrBoolean = de::Deserialize::deserialize(deserializer)?;
@@ -21,6 +22,7 @@ where
             _ => Err(de::Error::unknown_variant(&s, &["true", "false"])),
         },
         StringOrBoolean::Bool(b) => Ok(b),
+        StringOrBoolean::Number(n) => Ok(n > 0),
     }
 }
 
