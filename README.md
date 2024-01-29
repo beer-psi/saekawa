@@ -19,7 +19,7 @@ and place it in the same folder as the DLL.
 edit your segatools game.bat to look like the green line:
 ```diff
 - inject_x86.exe -d -k chusanhook.dll chusanApp.exe
-+ inject_x86.exe -d -k saekawa.dll -k chusanhook.dll chusanApp.exe
+inject_x86.exe -d -k saekawa.dll -k chusanhook.dll chusanApp.exe
 ```
 
 **DO NOT INJECT THIS DLL INTO `amdaemon.exe`! THE HOOK DOES NOT USE ANYTHING FROM amdaemon, AND YOU MIGHT GET A CRASH!**
