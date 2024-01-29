@@ -22,6 +22,8 @@ edit your segatools game.bat to look like the green line:
 + inject_x86.exe -d -k saekawa.dll -k chusanhook.dll chusanApp.exe
 ```
 
+**DO NOT INJECT THIS DLL INTO `amdaemon.exe`! THE HOOK DOES NOT USE ANYTHING FROM amdaemon, AND YOU MIGHT GET A CRASH!**
+
 ### Caveats
 This hook requires the game's network communications to be decrypted, which can be done
 by patching the game binary with your preferred patcher. (if you're already running a local
