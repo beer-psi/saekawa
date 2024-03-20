@@ -4,7 +4,6 @@ use aes::cipher::{block_padding::NoPadding, BlockDecryptMut, KeyIvInit};
 use anyhow::{anyhow, Result};
 use binary_reader::{BinaryReader, Endian};
 use chrono::{NaiveDate, NaiveDateTime};
-use log::warn;
 
 type Aes128CbcDec = cbc::Decryptor<aes::Aes128>;
 
@@ -167,8 +166,9 @@ pub fn decode_icf(data: &mut [u8]) -> Result<Vec<IcfData>> {
 
     let mut entries: Vec<IcfData> = Vec::with_capacity(entry_count);
     for _ in 0..entry_count {
-        let sig = rd.read_bytes(4)?;
-        if sig[0] != 2 || sig[1] != 1 {
+        let sig = rd.read_u32()?;
+
+        if sig != 0x0102 && sig != 0x0201 {
             return Err(anyhow!("Container does not start with signature (0x0102)"));
         }
 
@@ -179,8 +179,6 @@ pub fn decode_icf(data: &mut [u8]) -> Result<Vec<IcfData>> {
             }
         }
 
-        let (version, datetime, required_system_version) = decode_icf_container_data(&mut rd)?;
-
         let data: IcfData = match container_type {
             0x0000 | 0x0001 | 0x0002 => {
                 for _ in 0..2 {
@@ -188,6 +186,8 @@ pub fn decode_icf(data: &mut [u8]) -> Result<Vec<IcfData>> {
                         return Err(anyhow!("Padding error. Expected 16 NULL bytes."));
                     }
                 }
+
+                let (version, datetime, required_system_version) = decode_icf_container_data(&mut rd)?;
 
                 match container_type {
                     0x0000 => IcfData::System(IcfInnerData {
@@ -211,19 +211,28 @@ pub fn decode_icf(data: &mut [u8]) -> Result<Vec<IcfData>> {
                     _ => unreachable!(),
                 }
             }
-            0x0101 => {
-                let (target_version, _, _) = decode_icf_container_data(&mut rd)?;
+            _ => {
+                // PATCH container type also encode the patch's sequence number
+                // in the higher 16 bits.
+                // The lower 16 bits will always be 1.
+                let sequence_number = (container_type >> 8) as u8;
+
+                if (container_type & 1) == 0 || sequence_number == 0 {
+                    println!("Unknown ICF container type {container_type:#06x} at byte {:#06x}, skipping", rd.pos);
+                    rd.read_bytes(32)?;
+                    continue;
+                }
+
+                let (target_version, target_datetime, _) = decode_icf_container_data(&mut rd)?;
+                let (source_version, _, source_required_system_version) = decode_icf_container_data(&mut rd)?;
+
                 IcfData::Patch(IcfPatchData {
                     id: app_id.clone(),
-                    source_version: version,
+                    source_version,
                     target_version,
-                    required_system_version,
-                    datetime,
+                    required_system_version: source_required_system_version,          
+                    datetime: target_datetime,          
                 })
-            }
-            _ => {
-                warn!("Unknown ICF container type {container_type}");
-                continue;
             }
         };
 
