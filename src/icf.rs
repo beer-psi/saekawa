@@ -181,13 +181,14 @@ pub fn decode_icf(data: &mut [u8]) -> Result<Vec<IcfData>> {
 
         let data: IcfData = match container_type {
             0x0000 | 0x0001 | 0x0002 => {
+                let (version, datetime, required_system_version) =
+                    decode_icf_container_data(&mut rd)?;
+
                 for _ in 0..2 {
                     if rd.read_u64()? != 0 {
                         return Err(anyhow!("Padding error. Expected 16 NULL bytes."));
                     }
                 }
-
-                let (version, datetime, required_system_version) = decode_icf_container_data(&mut rd)?;
 
                 match container_type {
                     0x0000 => IcfData::System(IcfInnerData {
@@ -224,14 +225,15 @@ pub fn decode_icf(data: &mut [u8]) -> Result<Vec<IcfData>> {
                 }
 
                 let (target_version, target_datetime, _) = decode_icf_container_data(&mut rd)?;
-                let (source_version, _, source_required_system_version) = decode_icf_container_data(&mut rd)?;
+                let (source_version, _, source_required_system_version) =
+                    decode_icf_container_data(&mut rd)?;
 
                 IcfData::Patch(IcfPatchData {
                     id: app_id.clone(),
                     source_version,
                     target_version,
-                    required_system_version: source_required_system_version,          
-                    datetime: target_datetime,          
+                    required_system_version: source_required_system_version,
+                    datetime: target_datetime,
                 })
             }
         };
