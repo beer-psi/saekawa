@@ -12,9 +12,9 @@ use std::{ptr, thread};
 use ::log::{error, warn};
 use lazy_static::lazy_static;
 use url::Url;
-use winapi::shared::minwindef::{BOOL, DWORD, HINSTANCE, LPVOID, TRUE, FALSE};
+use winapi::shared::minwindef::{BOOL, DWORD, FALSE, HINSTANCE, LPVOID, TRUE};
 use winapi::um::errhandlingapi::GetLastError;
-use winapi::um::handleapi::{DuplicateHandle, CloseHandle};
+use winapi::um::handleapi::{CloseHandle, DuplicateHandle};
 use winapi::um::processthreadsapi::{GetCurrentProcess, GetCurrentThread};
 use winapi::um::synchapi::WaitForSingleObject;
 use winapi::um::winnt::{DLL_PROCESS_ATTACH, DLL_PROCESS_DETACH, SYNCHRONIZE};
@@ -123,11 +123,14 @@ extern "system" fn DllMain(dll_module: HINSTANCE, call_reason: DWORD, reserved: 
                     &mut cur_thread,
                     SYNCHRONIZE,
                     FALSE,
-                    0
+                    0,
                 );
 
                 if result == 0 {
-                    warn!("Failed to get current thread handle, error code: {}", GetLastError());
+                    warn!(
+                        "Failed to get current thread handle, error code: {}",
+                        GetLastError()
+                    );
                 }
 
                 (ThreadHandle(cur_thread), result)
@@ -137,7 +140,7 @@ extern "system" fn DllMain(dll_module: HINSTANCE, call_reason: DWORD, reserved: 
                 if result != 0 {
                     unsafe { cur_thread.wait_and_close(100) };
                 }
-    
+
                 if let Err(err) = hook_init() {
                     error!("Failed to initialize hook: {:#}", err);
                 }

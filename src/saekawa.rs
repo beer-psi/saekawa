@@ -1,5 +1,4 @@
 use std::{
-    ffi::CString,
     fmt::Debug,
     fs::File,
     io::Read,
@@ -10,18 +9,12 @@ use std::{
 use ::log::{debug, error, info};
 use anyhow::{anyhow, Result};
 use log::warn;
-use retour::static_detour;
 use serde::de::DeserializeOwned;
 use widestring::U16CString;
 use winapi::{
     ctypes::c_void,
-    shared::minwindef::{__some_function, BOOL, DWORD, FALSE, LPCVOID, LPDWORD, LPVOID, MAX_PATH},
-    um::{
-        errhandlingapi::GetLastError,
-        libloaderapi::{GetModuleHandleA, GetProcAddress},
-        winbase::GetPrivateProfileStringW,
-        winhttp::HINTERNET,
-    },
+    shared::minwindef::{BOOL, DWORD, FALSE, LPCVOID, LPDWORD, LPVOID, MAX_PATH},
+    um::{errhandlingapi::GetLastError, winbase::GetPrivateProfileStringW, winhttp::HINTERNET},
 };
 
 use crate::{
@@ -41,14 +34,6 @@ use crate::{
 
 pub static GAME_MAJOR_VERSION: AtomicU16 = AtomicU16::new(0);
 pub static PB_IMPORTED: AtomicBool = AtomicBool::new(true);
-
-type WinHttpWriteDataFunc = unsafe extern "system" fn(HINTERNET, LPCVOID, DWORD, LPDWORD) -> BOOL;
-type WinHttpReadDataFunc = unsafe extern "system" fn(HINTERNET, LPVOID, DWORD, LPDWORD) -> BOOL;
-
-static_detour! {
-    static DetourWriteData: unsafe extern "system" fn (HINTERNET, LPCVOID, DWORD, LPDWORD) -> BOOL;
-    static DetourReadData: unsafe extern "system" fn(HINTERNET, LPVOID, DWORD, LPDWORD) -> BOOL;
-}
 
 pub fn hook_init() -> Result<()> {
     if !CONFIGURATION.general.enable {
@@ -113,12 +98,9 @@ pub fn hook_init() -> Result<()> {
     let icf = decode_icf(&mut icf1_buf).map_err(|err| anyhow!("Reading ICF failed: {:#}", err))?;
 
     for entry in icf {
-        match entry {
-            IcfData::App(app) => {
-                info!("Running on {} {}", app.id, app.version);
-                GAME_MAJOR_VERSION.store(app.version.major, Ordering::Relaxed);
-            }
-            _ => {}
+        if let IcfData::App(app) = entry {
+            info!("Running on {} {}", app.id, app.version);
+            GAME_MAJOR_VERSION.store(app.version.major, Ordering::Relaxed);
         }
     }
 
@@ -133,7 +115,7 @@ pub fn hook_init() -> Result<()> {
         TachiResponse::Ok(resp) => {
             if !resp.body.permissions.iter().any(|v| v == "submit_score") {
                 return Err(anyhow!(
-                    "API key has insufficient permission. The permission submit_score must be set."
+                    "API key has insufficient permissions. The permission submit_score must be set."
                 ));
             }
 
@@ -149,39 +131,13 @@ pub fn hook_init() -> Result<()> {
 
     info!("Logged in to Tachi with userID {user_id}");
 
-    debug!("Acquring addresses");
-
-    let winhttpwritedata = unsafe {
-        let addr = get_proc_address("winhttp.dll", "WinHttpWriteData")
-            .map_err(|err| anyhow!("{:#}", err))?;
-
-        debug!("WinHttpWriteData: winhttp.dll!{:p}", addr);
-
-        std::mem::transmute::<_, WinHttpWriteDataFunc>(addr)
-    };
-
-    let winhttpreaddata = unsafe {
-        let addr = get_proc_address("winhttp.dll", "WinHttpReadData")
-            .map_err(|err| anyhow!("{:#}", err))?;
-
-        debug!("WinHttpReadData: winhttp.dll!{:p}", addr);
-
-        std::mem::transmute::<_, WinHttpReadDataFunc>(addr)
-    };
-
     debug!("Initializing detours");
 
-    unsafe {
-        debug!("Initializing WinHttpWriteData detour");
-        DetourWriteData
-            .initialize(winhttpwritedata, winhttpwritedata_hook_wrapper)?
-            .enable()?;
+    crochet::enable!(winhttpwritedata_hook_wrapper)?;
 
-        debug!("Initializing WinHttpReadData detour");
-        DetourReadData
-            .initialize(winhttpreaddata, winhttpreaddata_hook_wrapper)?
-            .enable()?;
-    };
+    if CONFIGURATION.general.export_pbs || cfg!(debug_assertions) {
+        crochet::enable!(winhttpreaddata_hook_wrapper)?;
+    }
 
     info!("Hook successfully initialized");
 
@@ -193,17 +149,18 @@ pub fn hook_release() -> Result<()> {
         return Ok(());
     }
 
-    if DetourWriteData.is_enabled() {
-        unsafe { DetourWriteData.disable()? };
+    if crochet::is_enabled!(winhttpreaddata_hook_wrapper) {
+        crochet::disable!(winhttpreaddata_hook_wrapper)?;
     }
 
-    if DetourReadData.is_enabled() {
-        unsafe { DetourReadData.disable()? };
+    if crochet::is_enabled!(winhttpwritedata_hook_wrapper) {
+        crochet::disable!(winhttpwritedata_hook_wrapper)?;
     }
 
     Ok(())
 }
 
+#[crochet::hook(compile_check, "winhttp.dll", "WinHttpReadData")]
 fn winhttpreaddata_hook_wrapper(
     h_request: HINTERNET,
     lp_buffer: LPVOID,
@@ -212,14 +169,12 @@ fn winhttpreaddata_hook_wrapper(
 ) -> BOOL {
     debug!("hit winhttpreaddata");
 
-    let result = unsafe {
-        DetourReadData.call(
-            h_request,
-            lp_buffer,
-            dw_number_of_bytes_to_read,
-            lpdw_number_of_bytes_read,
-        )
-    };
+    let result = call_original!(
+        h_request,
+        lp_buffer,
+        dw_number_of_bytes_to_read,
+        lpdw_number_of_bytes_read
+    );
 
     if result == FALSE {
         let ec = unsafe { GetLastError() };
@@ -265,6 +220,7 @@ fn winhttpreaddata_hook_wrapper(
     result
 }
 
+#[crochet::hook(compile_check, "winhttp.dll", "WinHttpWriteData")]
 fn winhttpwritedata_hook_wrapper(
     h_request: HINTERNET,
     lp_buffer: LPCVOID,
@@ -295,14 +251,12 @@ fn winhttpwritedata_hook_wrapper(
         error!("{err:?}");
     }
 
-    unsafe {
-        DetourWriteData.call(
-            h_request,
-            lp_buffer,
-            dw_number_of_bytes_to_write,
-            lpdw_number_of_bytes_written,
-        )
-    }
+    call_original!(
+        h_request,
+        lp_buffer,
+        dw_number_of_bytes_to_write,
+        lpdw_number_of_bytes_written
+    )
 }
 
 /// Common hook for WinHttpWriteData/WinHttpReadData. The flow is similar for both
@@ -398,23 +352,4 @@ fn winhttprwdata_hook<'a, T: Debug + DeserializeOwned + ToTachiImport + 'static>
     });
 
     Ok(())
-}
-
-fn get_proc_address(module: &str, function: &str) -> Result<*mut __some_function> {
-    let module_name = CString::new(module).unwrap();
-    let fun_name = CString::new(function).unwrap();
-
-    let module = unsafe { GetModuleHandleA(module_name.as_ptr()) };
-    if (module as *const c_void).is_null() {
-        let ec = unsafe { GetLastError() };
-        return Err(anyhow!("could not get module handle, error code {ec}"));
-    }
-
-    let addr = unsafe { GetProcAddress(module, fun_name.as_ptr()) };
-    if (addr as *const c_void).is_null() {
-        let ec = unsafe { GetLastError() };
-        return Err(anyhow!("could not get function address, error code {ec}"));
-    }
-
-    Ok(addr)
 }
