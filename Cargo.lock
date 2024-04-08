@@ -762,7 +762,7 @@ checksum = "e86697c916019a8588c99b5fac3cead74ec0b4b819707a682fd4d23fa0ce1ba1"
 
 [[package]]
 name = "saekawa"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "aes",
  "anyhow",

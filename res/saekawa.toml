@@ -11,7 +11,7 @@ export_pbs = false
 # Whether FAILED should override FULL COMBO and ALL JUSTICE.
 fail_over_lamp = false
 # Timeout for web requests, in milliseconds
-timeout = 3000
+timeout = 30000
 
 [cards]
 # **DOES NOT WORK FOR WHITELISTING PBS!!**
@@ -45,10 +45,10 @@ iterations = 70
 
 [tachi]
 # Tachi instance base URL
-base_url = 'https://kamaitachi.xyz/'
+base_url = "https://kamai.tachi.ac"
 # Tachi status endpoint
-status = '/api/v1/status'
+status = "/api/v1/status"
 # Tachi score import endpoint
-import = '/ir/direct-manual/import'
+import = "/ir/direct-manual/import"
 # Your Tachi API key
-api_key = 'your-key-here'
+api_key = "your-key-here"
