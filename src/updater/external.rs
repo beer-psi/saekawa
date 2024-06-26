@@ -1,3 +1,5 @@
+use std::ptr;
+
 use winapi::{
     ctypes::c_void,
     shared::{
@@ -8,31 +10,31 @@ use winapi::{
 
 #[link_section = ".rtext"]
 #[used]
-pub static mut GET_MODULE_FILE_NAME_A_PTR: PROC = 0 as PROC;
+pub static mut GET_MODULE_FILE_NAME_A_PTR: PROC = ptr::null_mut();
 
 #[link_section = ".rtext"]
 #[used]
-pub static mut GET_PROCESS_HEAP_PTR: PROC = 0 as PROC;
+pub static mut GET_PROCESS_HEAP_PTR: PROC = ptr::null_mut();
 
 #[link_section = ".rtext"]
 #[used]
-pub static mut REPLCE_FILE_W_PTR: PROC = 0 as PROC;
+pub static mut REPLCE_FILE_W_PTR: PROC = ptr::null_mut();
 
 #[link_section = ".rtext"]
 #[used]
-pub static mut LOAD_LIBRARY_W_POINTER: PROC = 0 as PROC;
+pub static mut LOAD_LIBRARY_W_POINTER: PROC = ptr::null_mut();
 
 #[link_section = ".rtext"]
 #[used]
-pub static mut HEAP_FREE_PTR: PROC = 0 as PROC;
+pub static mut HEAP_FREE_PTR: PROC = ptr::null_mut();
 
 #[link_section = ".rtext"]
 #[used]
-pub static mut SLEEP_PTR: PROC = 0 as PROC;
+pub static mut SLEEP_PTR: PROC = ptr::null_mut();
 
 #[link_section = ".rtext"]
 #[used]
-pub static mut GET_LAST_ERROR_PTR: PROC = 0 as PROC;
+pub static mut GET_LAST_ERROR_PTR: PROC = ptr::null_mut();
 
 type GetModuleFileNameAFn = unsafe extern "system" fn(HMODULE, LPSTR, DWORD) -> DWORD;
 type GetProcessHeapFn = unsafe extern "system" fn() -> HANDLE;
@@ -78,10 +80,10 @@ pub unsafe extern "system" fn replace_with_new_library(parameter: *const c_void)
     let result = ReplaceFileW(
         (*args).old.as_ptr(),
         (*args).new.as_ptr(),
-        std::ptr::null(),
+        ptr::null(),
         2,
-        std::ptr::null_mut(),
-        std::ptr::null_mut(),
+        ptr::null_mut(),
+        ptr::null_mut(),
     );
 
     if result > 0 {
