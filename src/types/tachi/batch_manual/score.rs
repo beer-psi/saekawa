@@ -2,6 +2,7 @@ use num_enum::TryFromPrimitive;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct BatchManualScore {
     pub match_type: MatchType,
     pub identifier: String,
