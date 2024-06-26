@@ -97,14 +97,14 @@ static UPSERT_USER_ALL_API: OnceLock<String> = OnceLock::new();
 static CONFIG: OnceLock<SaekawaConfig> = OnceLock::new();
 
 pub fn hook_init() -> Result<(), HookError> {
-    info!("Reading hook configuration");
+    debug!("Reading hook configuration");
     let config = SaekawaConfig::load().context(ConfigSnafu)?;
 
     if config.cards.is_empty() {
         return Err(HookError::NoCardsError);
     }
 
-    info!("Loaded tokens for {} access codes", config.cards.len());
+    info!("Loaded API keys for {} access code(s).", config.cards.len());
 
     if let Some(d) = &config.general.failed_import_dir {
         if d.exists() && !d.is_dir() {
@@ -124,7 +124,7 @@ pub fn hook_init() -> Result<(), HookError> {
     let info = get_project_conf()?;
 
     info!(
-        "Running on {} {}.{}.{}",
+        "Running on {} {}.{:0>2}.{:0>2}",
         info.game_id, info.major, info.minor, info.build
     );
 
@@ -139,17 +139,18 @@ pub fn hook_init() -> Result<(), HookError> {
     debug!("Checking if network requests are encrypted");
     setup_network_encryption(&info)?;
 
-    info!("Enabling hooks");
     crochet::enable!(winhttpwritedata_hook).context(CrochetSnafu)?;
+    info!("Hooks enabled.");
 
     Ok(())
 }
 
 pub fn hook_release() -> Result<(), HookError> {
     if crochet::is_enabled!(winhttpwritedata_hook) {
-        info!("Disabling hooks");
         crochet::disable!(winhttpwritedata_hook).context(CrochetSnafu)?;
     }
+
+    info!("Hooks disabled.");
 
     Ok(())
 }
