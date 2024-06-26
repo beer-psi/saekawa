@@ -197,6 +197,9 @@ pub fn self_update(module: &LibraryHandle) -> Result<bool, SelfUpdateError> {
         .into_json::<UpdateInformation>()
         .context(InvalidUpdateInformationSnafu)?;
 
+    debug!(concat!("current commit: ", env!("VERGEN_GIT_SHA")));
+    debug!("remote commit: {}", response.commit);
+
     if response.commit == env!("VERGEN_GIT_SHA") {
         info!("Already up-to-date.");
 
