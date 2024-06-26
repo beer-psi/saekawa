@@ -18,8 +18,7 @@ use winapi::{
         minwindef::{BOOL, DWORD, HMODULE, LPVOID, PROC},
         ntdef::{LPCWSTR, LPSTR},
         winerror::{
-            CERT_E_CHAINING, CERT_E_EXPIRED, CERT_E_UNTRUSTEDROOT, CRYPT_E_SECURITY_SETTINGS,
-            TRUST_E_EXPLICIT_DISTRUST, TRUST_E_NOSIGNATURE,
+            CERT_E_CHAINING, CERT_E_EXPIRED, CERT_E_UNTRUSTEDROOT, CRYPT_E_SECURITY_SETTINGS, TRUST_E_BAD_DIGEST, TRUST_E_EXPLICIT_DISTRUST, TRUST_E_NOSIGNATURE
         },
     },
     um::{
@@ -147,6 +146,9 @@ pub enum VerifySignatureError {
 
     #[snafu(display("No signatures found."))]
     NoSignature,
+
+    #[snafu(display("The signature failed to verify."))]
+    SignatureBadDigest,
 
     #[snafu(display("The signature was explicitly distrusted."))]
     ExplicitlyDistrusted,
@@ -469,6 +471,7 @@ fn verify_signature(file: &str) -> Result<(), VerifySignatureError> {
             CRYPT_E_SECURITY_SETTINGS => Err(VerifySignatureError::VerificationDisabledByPolicy),
             TRUST_E_NOSIGNATURE => Err(VerifySignatureError::NoSignature),
             TRUST_E_EXPLICIT_DISTRUST => Err(VerifySignatureError::ExplicitlyDistrusted),
+            TRUST_E_BAD_DIGEST => Err(VerifySignatureError::SignatureBadDigest),
             _ => Err(VerifySignatureError::Unknown { errno: status }),
         }
     }
