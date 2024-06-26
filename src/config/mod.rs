@@ -1,7 +1,7 @@
 mod defaults;
 mod migrate;
 
-use std::{collections::HashMap, path::PathBuf, str::FromStr};
+use std::{collections::HashMap, fs::File, path::PathBuf, str::FromStr};
 
 use log::{info, warn};
 use migrate::OldSaekawaConfig;
@@ -76,6 +76,12 @@ impl SaekawaConfig {
                     tachi: new_tachi_config,
                 };
 
+                {
+                    // confy doesn't actually truncate the file??
+                    if let Ok(f) = File::create("saekawa.toml") {
+                        f.set_len(0).ok();
+                    }
+                }
                 confy::store_path("saekawa.toml", new_config.clone()).context(ConfySnafu)?;
 
                 Ok(new_config)
