@@ -15,6 +15,7 @@ pub enum DecryptError {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct MaybeDecompressError {
     pub zlib_error: io::Error,
     pub raw_error: io::Error,

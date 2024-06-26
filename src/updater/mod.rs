@@ -92,6 +92,7 @@ extern "system" {
 }
 
 #[derive(Debug, Snafu)]
+#[allow(clippy::large_enum_variant)]
 pub enum SelfUpdateError {
     #[snafu(display("Could not get the file name of the currently running hook"))]
     FailedToGetFilename { source: ReadStringFnError },
@@ -157,22 +158,22 @@ pub enum VerifySignatureError {
 #[derive(Snafu, Debug)]
 pub enum GetSignaturePubkeyError {
     #[snafu(display("CertQueryObject failed: {errno}"))]
-    QueryObjectError { errno: u32 },
+    QueryObject { errno: u32 },
 
     #[snafu(display("Could not obtain size of signer information: {errno}"))]
-    SignerInfoSizeError { errno: u32 },
+    SignerInfoSize { errno: u32 },
 
     #[snafu(display("Could not allocate memory for signer information: {errno}"))]
-    SignerInfoAllocError { errno: u32 },
+    SignerInfoAlloc { errno: u32 },
 
     #[snafu(display("Could not obtain signer information: {errno}"))]
-    SignerInfoObtainError { errno: u32 },
+    SignerInfoObtain { errno: u32 },
 
     #[snafu(display("Could not look up certificate in certificate store: {errno}"))]
-    CertificateInStoreError { errno: u32 },
+    CertificateInStore { errno: u32 },
 
     #[snafu(display("Could not read public key."))]
-    ReadPubkeyError { source: io::Error },
+    ReadPubkey { source: io::Error },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -184,6 +185,7 @@ struct UpdateInformation {
 
 /// Checks if the hook has a newer version. Returns true if update was successful
 /// and the hook should uninject itself so a newer version can load in.
+#[allow(clippy::result_large_err)]
 pub fn self_update(module: &LibraryHandle) -> Result<bool, SelfUpdateError> {
     let agent = ureq::builder()
         .user_agent(concat!("saekawa/", env!("CARGO_PKG_VERSION")))
@@ -367,8 +369,8 @@ pub fn self_update(module: &LibraryHandle) -> Result<bool, SelfUpdateError> {
             debug!("Allocated heap for updater code at {heap:p}");
 
             (*heap).module = module.handle();
-            let old = U16CString::from_str_truncate(&module_filename);
-            let new = U16CString::from_str_truncate(&new_module_path.to_string_lossy());
+            let old = U16CString::from_str_truncate(module_filename);
+            let new = U16CString::from_str_truncate(new_module_filename);
             std::ptr::copy_nonoverlapping(
                 old.as_ptr(),
                 (*heap).old.as_mut_ptr(),
@@ -384,7 +386,7 @@ pub fn self_update(module: &LibraryHandle) -> Result<bool, SelfUpdateError> {
             let handle = CreateThread(
                 ptr::null_mut(),
                 0,
-                Some(std::mem::transmute(updater_start_address)),
+                Some(std::mem::transmute::<PROC, unsafe extern "system" fn(*mut winapi::ctypes::c_void) -> u32>(updater_start_address)),
                 heap as *mut _,
                 0,
                 ptr::null_mut(),
@@ -400,10 +402,11 @@ pub fn self_update(module: &LibraryHandle) -> Result<bool, SelfUpdateError> {
             return Ok(true);
         }
 
-        return Err(SelfUpdateError::NoUpdaterCodeSection);
+        Err(SelfUpdateError::NoUpdaterCodeSection)
     }
 }
 
+#[allow(clippy::result_large_err)]
 fn validate_sha256(data: &[u8], expected: &str) -> Result<(), SelfUpdateError> {
     let mut hasher = Sha256::new();
 
@@ -494,7 +497,7 @@ fn get_signature_pubkey(file: &str) -> Result<Vec<u8>, GetSignaturePubkeyError> 
     };
 
     if result == 0 {
-        return Err(GetSignaturePubkeyError::QueryObjectError {
+        return Err(GetSignaturePubkeyError::QueryObject {
             errno: unsafe { GetLastError() },
         });
     }
@@ -511,7 +514,7 @@ fn get_signature_pubkey(file: &str) -> Result<Vec<u8>, GetSignaturePubkeyError> 
     };
 
     if result == 0 {
-        return Err(GetSignaturePubkeyError::SignerInfoSizeError {
+        return Err(GetSignaturePubkeyError::SignerInfoSize {
             errno: unsafe { GetLastError() },
         });
     }
@@ -520,7 +523,7 @@ fn get_signature_pubkey(file: &str) -> Result<Vec<u8>, GetSignaturePubkeyError> 
         unsafe { LocalAlloc(LMEM_ZEROINIT, signer_info_length as usize) } as PCMSG_SIGNER_INFO;
 
     if signer_info.is_null() {
-        return Err(GetSignaturePubkeyError::SignerInfoAllocError {
+        return Err(GetSignaturePubkeyError::SignerInfoAlloc {
             errno: unsafe { GetLastError() },
         });
     }
@@ -536,7 +539,7 @@ fn get_signature_pubkey(file: &str) -> Result<Vec<u8>, GetSignaturePubkeyError> 
     };
 
     if result == 0 {
-        return Err(GetSignaturePubkeyError::SignerInfoObtainError {
+        return Err(GetSignaturePubkeyError::SignerInfoObtain {
             errno: unsafe { GetLastError() },
         });
     }
@@ -562,7 +565,7 @@ fn get_signature_pubkey(file: &str) -> Result<Vec<u8>, GetSignaturePubkeyError> 
     };
 
     if cert.is_null() {
-        return Err(GetSignaturePubkeyError::CertificateInStoreError {
+        return Err(GetSignaturePubkeyError::CertificateInStore {
             errno: unsafe { GetLastError() },
         });
     }

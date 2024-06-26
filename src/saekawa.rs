@@ -66,18 +66,18 @@ pub enum HookError {
 #[derive(Debug, Snafu)]
 pub enum ProcessRequestError {
     #[snafu(display("Could not read URL from HINTERNET handle"))]
-    UrlReadError { source: ReadStringFnError },
+    UrlRead { source: ReadStringFnError },
 
     #[snafu(display("The URL does not have an endpoint"))]
-    UrlMissingEndpointError,
+    UrlMissingEndpoint,
 
     #[snafu(display(
         "Hooked function was called before all necessary state has been initialized"
     ))]
-    UninitializedError,
+    UninitializedState,
 
     #[snafu(display("Could not read request body"))]
-    ReadBodyError { source: io::Error },
+    ReadBody { source: io::Error },
 }
 
 #[derive(Debug, Clone)]
@@ -170,6 +170,7 @@ pub fn hook_release() -> Result<(), HookError> {
     Ok(())
 }
 
+#[allow(clippy::missing_transmute_annotations)]
 #[crochet::hook(compile_check, "winhttp.dll", "WinHttpWriteData")]
 fn winhttpwritedata_hook(
     hrequest: HINTERNET,
@@ -201,10 +202,10 @@ fn process_request(
     let endpoint = url
         .split('/')
         .last()
-        .ok_or(ProcessRequestError::UrlMissingEndpointError)?;
+        .ok_or(ProcessRequestError::UrlMissingEndpoint)?;
     let upsert_user_all_endpoint = UPSERT_USER_ALL_API
         .get()
-        .ok_or(ProcessRequestError::UninitializedError)?;
+        .ok_or(ProcessRequestError::UninitializedState)?;
 
     if endpoint != upsert_user_all_endpoint {
         return Ok(());
@@ -248,7 +249,7 @@ fn process_request(
             raw_body
         };
 
-        let body = match maybe_decompress_buffer(&compressed_body) {
+        let body = match maybe_decompress_buffer(compressed_body) {
             Ok(s) => s,
             Err(e) => {
                 error!("Could not read request as DEFLATE-compressed or plaintext: {e:#?}");
@@ -286,7 +287,7 @@ fn process_request(
             config.general.fail_over_lamp,
         );
 
-        if let Err(e) = execute_score_import(import, access_code, &tachi_api_key, &config) {
+        if let Err(e) = execute_score_import(import, access_code, tachi_api_key, config) {
             error!("{e}");
         }
     });

@@ -55,12 +55,12 @@ pub struct ReplaceArgs {
 pub unsafe extern "system" fn replace_with_new_library(parameter: *const c_void) -> u32 {
     let args = parameter as *const ReplaceArgs;
     let GetModuleFileNameA =
-        std::mem::transmute::<_, GetModuleFileNameAFn>(GET_MODULE_FILE_NAME_A_PTR);
-    let GetProcessHeap = std::mem::transmute::<_, GetProcessHeapFn>(GET_PROCESS_HEAP_PTR);
-    let ReplaceFileW = std::mem::transmute::<_, ReplaceFileWFn>(REPLCE_FILE_W_PTR);
-    let LoadLibraryW = std::mem::transmute::<_, LoadLibraryWFn>(LOAD_LIBRARY_W_POINTER);
-    let HeapFree = std::mem::transmute::<_, HeapFreeFn>(HEAP_FREE_PTR);
-    let Sleep = std::mem::transmute::<_, SleepFn>(SLEEP_PTR);
+        std::mem::transmute::<PROC, GetModuleFileNameAFn>(GET_MODULE_FILE_NAME_A_PTR);
+    let GetProcessHeap = std::mem::transmute::<PROC, GetProcessHeapFn>(GET_PROCESS_HEAP_PTR);
+    let ReplaceFileW = std::mem::transmute::<PROC, ReplaceFileWFn>(REPLCE_FILE_W_PTR);
+    let LoadLibraryW = std::mem::transmute::<PROC, LoadLibraryWFn>(LOAD_LIBRARY_W_POINTER);
+    let HeapFree = std::mem::transmute::<PROC, HeapFreeFn>(HEAP_FREE_PTR);
+    let Sleep = std::mem::transmute::<PROC, SleepFn>(SLEEP_PTR);
 
     // Wait for the old library to be freed
     let mut filename = 0;
@@ -78,10 +78,10 @@ pub unsafe extern "system" fn replace_with_new_library(parameter: *const c_void)
     let result = ReplaceFileW(
         (*args).old.as_ptr(),
         (*args).new.as_ptr(),
-        0 as *const _,
+        std::ptr::null(),
         2,
-        0 as *mut c_void,
-        0 as *mut c_void,
+        std::ptr::null_mut(),
+        std::ptr::null_mut(),
     );
 
     if result > 0 {

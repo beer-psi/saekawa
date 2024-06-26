@@ -70,7 +70,7 @@ pub fn execute_score_import(
         &client,
         "POST",
         &import_url,
-        &api_key,
+        api_key,
         Some(&import),
     ) {
         Ok(r) => r,
@@ -113,14 +113,14 @@ pub fn execute_score_import(
     match response.body {
         ImportResponse::Deferred(d) => {
             info!("Import was queued for processing. Poll URL: {}", d.url);
-            poll_deferred_import(&client, &api_key, &d.url);
-            return Ok(());
+            poll_deferred_import(&client, api_key, &d.url);
         }
         ImportResponse::Completed(d) => {
             log_tachi_import(&response.description, &d);
-            return Ok(());
         }
     }
+
+    Ok(())
 }
 
 fn saekawa_client(config: &SaekawaConfig) -> ureq::Agent {
@@ -135,7 +135,7 @@ fn exponential_backoff(rand: &mut ThreadRng, attempt: u32) -> u64 {
     // 0       | 2-4 seconds
     // 1       | 8-16 seconds
     // 2       | 32-64 seconds
-    return rand.gen_range(500..=1000) * 4_u64.pow(attempt + 1);
+    rand.gen_range(500..=1000) * 4_u64.pow(attempt + 1)
 }
 
 fn request_tachi<T, R>(
@@ -215,9 +215,9 @@ where
             .context(InvalidTachiResponseSnafu);
     }
 
-    return Err(ScoreImportError::MaxRetriesExhausted {
+    Err(ScoreImportError::MaxRetriesExhausted {
         max_retries: MAX_RETRY_COUNT,
-    });
+    })
 }
 
 fn log_tachi_import(description: &str, import: &ImportDocument) {
@@ -236,7 +236,7 @@ fn log_tachi_import(description: &str, import: &ImportDocument) {
 fn poll_deferred_import(client: &ureq::Agent, api_key: &str, poll_url: &str) {
     loop {
         let resp = match request_tachi::<_, ImportPollStatus>(
-            &client, "GET", &poll_url, &api_key, None::<()>,
+            client, "GET", poll_url, api_key, None::<()>,
         ) {
             Ok(r) => r,
             Err(e) => {
@@ -253,12 +253,9 @@ fn poll_deferred_import(client: &ureq::Agent, api_key: &str, poll_url: &str) {
             }
         };
 
-        match resp.body {
-            ImportPollStatus::Completed { import } => {
-                log_tachi_import(&resp.description, &import);
-                return;
-            }
-            _ => {}
+        if let ImportPollStatus::Completed { import } = resp.body {
+            log_tachi_import(&resp.description, &import);
+            return;
         }
 
         thread::sleep(Duration::from_secs(1));

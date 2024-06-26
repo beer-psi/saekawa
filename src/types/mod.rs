@@ -108,8 +108,7 @@ impl ToBatchManual for UpsertUserAllRequest {
             };
             let emblem = user_data
                 .class_emblem_base
-                .map(|b| ClassEmblem::try_from(b).ok())
-                .flatten();
+                .and_then(|b| ClassEmblem::try_from(b).ok());
 
             Some(BatchManualClasses { dan, emblem })
         } else {
