@@ -20,7 +20,6 @@ use crate::{
     helpers::winapi_ext::LibraryHandle,
     logging::init_logger,
     saekawa::{hook_init, hook_release},
-    updater::self_update,
 };
 
 #[no_mangle]
@@ -45,19 +44,7 @@ extern "system" fn DllMain(dll_module: HINSTANCE, call_reason: DWORD, reserved: 
                     env!("VERGEN_GIT_BRANCH"),
                 );
 
-                match self_update(&library_handle) {
-                    Ok(should_reboot) => {
-                        if should_reboot {
-                            info!("Self-update successful. Reloading into new hook...");
-                            library_handle.free_and_exit_thread(1);
-                        }
-                    }
-                    Err(e) => {
-                        error!("Self-update failed: {e:#}");
-                    }
-                }
-
-                if let Err(e) = hook_init() {
+                if let Err(e) = hook_init(library_handle) {
                     error!("Failed to initialize hook: {e:#}");
                 }
             });

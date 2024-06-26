@@ -25,11 +25,11 @@ use crate::{
     config::{ConfigLoadError, SaekawaConfig},
     helpers::{
         chuni_encoding::{decrypt_aes256_cbc, hash_endpoint, maybe_decompress_buffer},
-        winapi_ext::{winhttp_query_option, ReadStringFnError},
+        winapi_ext::{winhttp_query_option, LibraryHandle, ReadStringFnError},
     },
     score_import::execute_score_import,
     sigscan::{self, CryptoKeys},
-    types::{chuni::UpsertUserAllRequest, ToBatchManual},
+    types::{chuni::UpsertUserAllRequest, ToBatchManual}, updater::self_update,
 };
 
 #[derive(Debug, Snafu)]
@@ -96,9 +96,23 @@ static UPSERT_USER_ALL_API: OnceLock<String> = OnceLock::new();
 
 static CONFIG: OnceLock<SaekawaConfig> = OnceLock::new();
 
-pub fn hook_init() -> Result<(), HookError> {
+pub fn hook_init(library_handle: LibraryHandle) -> Result<(), HookError> {
     debug!("Reading hook configuration");
     let config = SaekawaConfig::load().context(ConfigSnafu)?;
+
+    if config.general.auto_update {
+        match self_update(&library_handle) {
+            Ok(should_reboot) => {
+                if should_reboot {
+                    info!("Self-update successful. Reloading into new hook...");
+                    library_handle.free_and_exit_thread(1);
+                }
+            }
+            Err(e) => {
+                error!("Self-update failed: {e:#}");
+            }
+        }
+    }
 
     if config.cards.is_empty() {
         return Err(HookError::NoCardsError);
