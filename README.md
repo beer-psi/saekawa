@@ -24,14 +24,6 @@ inject_x86.exe -d -k saekawa.dll -k chusanhook.dll chusanApp.exe
 
 **DO NOT INJECT THIS DLL INTO `amdaemon.exe`! THE HOOK DOES NOT USE ANYTHING FROM amdaemon, AND YOU MIGHT GET A CRASH!**
 
-### Caveats
-This hook requires the game's network communications to be decrypted, which can be done
-by patching the game binary with your preferred patcher. (if you're already running a local
-server like Aqua or ARTEMiS and had no idea encryption even existed, you're good to go)
-
-If you choose not to patch, you will need to obtain the necessary keys and provide them
-in the configuration file.
-
 ### Credits
 - Adam Thibert ([adamaq01](https://github.com/adamaq01)). A lot of the code was copied from
 [Mikado](https://github.com/adamaq01/Mikado), a similar hook for SDVX.
