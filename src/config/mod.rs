@@ -1,7 +1,7 @@
 mod defaults;
 mod migrate;
 
-use std::{collections::HashMap, fs::File, path::PathBuf, str::FromStr};
+use std::{collections::HashMap, fs::File, io::Write, path::{Path, PathBuf}, str::FromStr};
 
 use log::{info, warn};
 use migrate::OldSaekawaConfig;
@@ -37,6 +37,13 @@ pub enum MigrationError {
 
 impl SaekawaConfig {
     pub fn load() -> Result<SaekawaConfig, ConfigLoadError> {
+        if !Path::new("saekawa.toml").exists() {
+            // We don't really care about the error here, since Confy will autogenerate a 
+            // default configuration file anyways. That one just doesn't have comments.
+            let _ = File::create_new("saekawa.toml")
+                .and_then(|mut file| file.write_all(include_bytes!("../../res/saekawa.toml")));
+        }
+        
         let result = confy::load_path::<SaekawaConfig>("saekawa.toml");
 
         match result {
