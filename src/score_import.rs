@@ -89,7 +89,7 @@ pub fn execute_score_import(
 
             {
                 let file = File::create(&failed_import_filename).context(FailedCreatingBackupSnafu)?;
-                serde_json::to_writer(file, &import).context(FailedWritingBackupSnafu)?;
+                serde_json::to_writer_pretty(file, &import).context(FailedWritingBackupSnafu)?;
             }
 
             info!("Saved batch manual JSON to {}", failed_import_filename.to_string_lossy());
