@@ -354,7 +354,7 @@ fn setup_network_encryption(info: &GameInformation) -> Result<(), HookError> {
                 .context(CryptoScanSnafu)?
         };
 
-        info!("Search completed successfully.");
+        debug!("Search completed successfully.");
 
         #[cfg(debug_assertions)]
         {

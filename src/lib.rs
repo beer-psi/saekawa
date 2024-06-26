@@ -9,6 +9,7 @@ mod updater;
 
 use std::thread;
 
+use helpers::winapi_ext::ThreadHandle;
 use log::{error, info, warn};
 use winapi::{
     shared::minwindef::{BOOL, DWORD, HINSTANCE, LPVOID, TRUE},
@@ -30,8 +31,13 @@ extern "system" fn DllMain(dll_module: HINSTANCE, call_reason: DWORD, reserved: 
             init_logger();
 
             let library_handle = unsafe { LibraryHandle::new(dll_module) };
+            let thread_handle = ThreadHandle::duplicate_thread_handle();
 
             thread::spawn(move || {
+                if let Ok(h) = thread_handle {
+                    h.wait_and_close(1000);
+                }
+
                 info!(
                     "saekawa {} ({}@{}) starting up...",
                     env!("CARGO_PKG_VERSION"),

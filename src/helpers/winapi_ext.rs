@@ -1,17 +1,50 @@
+use std::ptr;
+
 use snafu::prelude::Snafu;
 use widestring::U16CString;
 use winapi::{
     ctypes::c_void,
     shared::{
-        minwindef::{HINSTANCE, HMODULE, TRUE},
-        winerror::ERROR_INSUFFICIENT_BUFFER,
+        minwindef::{FALSE, HINSTANCE, HMODULE, TRUE}, ntdef::HANDLE, winerror::ERROR_INSUFFICIENT_BUFFER
     },
     um::{
-        errhandlingapi::GetLastError,
-        libloaderapi::{FreeLibraryAndExitThread, GetModuleFileNameW},
-        winhttp::{WinHttpQueryOption, HINTERNET},
+        errhandlingapi::GetLastError, handleapi::{CloseHandle, DuplicateHandle}, libloaderapi::{FreeLibraryAndExitThread, GetModuleFileNameW}, processthreadsapi::{GetCurrentProcess, GetCurrentThread}, synchapi::WaitForSingleObject, winhttp::{WinHttpQueryOption, HINTERNET}, winnt::SYNCHRONIZE
     },
 };
+
+pub struct ThreadHandle(HANDLE);
+
+unsafe impl Send for ThreadHandle {}
+unsafe impl Sync for ThreadHandle {}
+impl ThreadHandle {
+    pub fn duplicate_thread_handle() -> Result<Self, u32> {
+        unsafe {
+            let mut cur_thread = ptr::null_mut();
+            let result = DuplicateHandle(
+                GetCurrentProcess(),
+                GetCurrentThread(),
+                GetCurrentProcess(),
+                &mut cur_thread,
+                SYNCHRONIZE,
+                FALSE,
+                0,
+            );
+
+            if result == 0 {
+                return Err(GetLastError());
+            }
+
+            Ok(ThreadHandle(cur_thread as HANDLE))
+        }
+    }
+
+    pub fn wait_and_close(self, ms: u32) {
+        unsafe {
+            WaitForSingleObject(self.0, ms);
+            CloseHandle(self.0);
+        }
+    }
+}
 
 pub struct LibraryHandle(HINSTANCE);
 
