@@ -164,7 +164,10 @@ where
             Ok(r) => r,
             Err(ureq::Error::Transport(e)) => {
                 error!("Could not reach Tachi API. Is your network up or are they having issues?.");
-                error!("Detailed error: {e:#?}");
+
+                if let Some(m) = e.message() {
+                    error!("Detailed error message: {}", m);
+                }
 
                 if attempt != MAX_RETRY_COUNT - 1 {
                     let wait_time = exponential_backoff(&mut rand, attempt);
@@ -231,7 +234,7 @@ fn poll_deferred_import(client: &ureq::Agent, api_key: &str, poll_url: &str) {
         ) {
             Ok(r) => r,
             Err(e) => {
-                error!("Could not poll import status. While Tachi has received the score, Saekawa cannot make any guarantees about its success. Detailed error: {e:#?}");
+                error!("Could not poll import status. While Tachi has received the score, Saekawa cannot make any guarantees about its success. Detailed error: {e:#}");
                 return;
             }
         };
