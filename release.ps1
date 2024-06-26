@@ -12,5 +12,4 @@ if (!(Test-Path ./saekawa.pfx)) {
 }
 
 signtool sign -f saekawa.pfx -p "saekawa" -fd SHA256 -t http://timestamp.comodoca.com/authenticode -v target/i686-pc-windows-msvc/release/saekawa.dll
-
-Write-Output "Remember to make the .rtext section writable for auto-updates! I have fuck all idea how to do it in Rust itself, so it's manual from here. The DLL has already been signed."
+sha256sum target/i686-pc-windows-msvc/release/saekawa.dll
