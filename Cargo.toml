@@ -1,42 +1,38 @@
 [package]
 name = "saekawa"
-version = "0.3.4"
-authors = ["beerpsi <lacvtg.a1.2023@gmail.com>"]
+version = "0.4.0"
 edition = "2021"
 license = "0BSD"
 
 [lib]
 crate-type = ["cdylib"]
 
-[profile.release]
-strip = true  # Automatically strip symbols from the binary.
-opt-level = "z"  # Optimize for size.
-lto = true
-codegen-units = 1
-panic = "abort"
-
 [dependencies]
-aes = "0.8.3"
-anyhow = "1.0.75"
-binary-reader = "0.4.5"
+aes = "0.8.4"
 cbc = "0.1.2"
-chrono = "0.4.31"
+chrono = "0.4.38"
 confy = "0.6.1"
-crc32fast = "1.3.2"
 crochet = "0.2.3"
-env_logger = "0.10.2"
+env_logger = "0.11.3"
 faster-hex = "0.9.0"
-flate2 = "1.0.28"
-hex-literal = "0.4.1"
-lazy_static = "1.4.0"
-log = "0.4.20"
-num_enum = "0.7.1"
+flate2 = "1.0.30"
+lightningscanner = "1.0.2"
+log = "0.4.21"
+num_enum = "0.7.2"
 pbkdf2 = "0.12.2"
-serde = { version = "1.0.193", features = ["derive"] }
-serde-aux = "4.3.1"
-serde_json = "1.0.108"
+rand = "0.8.5"
+rust-ini = "0.21.0"
+serde = { version = "1.0.203", features = ["derive"] }
+serde-aux = "4.5.0"
+serde_json = "1.0.117"
 sha1 = "0.10.6"
-ureq = { version = "2.9.1", features = ["json"] }
-url = "2.5.0"
-widestring = "1.0.2"
-winapi = { version = "0.3.9", features = ["winhttp", "minwindef", "debugapi", "synchapi", "libloaderapi", "processthreadsapi"] }
+sha2 = "0.10.8"
+snafu = "0.8.3"
+ureq = { version = "2.9.7", features = ["json"] }
+url = { version = "2.5.2", features = ["serde"] }
+widestring = "1.1.0"
+winapi = { version = "0.3.9", features = ["minwindef", "winnt", "psapi", "processthreadsapi", "libloaderapi", "errhandlingapi", "winhttp", "synchapi", "debugapi", "wincon", "heapapi", "winbase", "wincrypt", "softpub", "wintrust"] }
+
+[build-dependencies]
+snafu = "0.8.3"
+vergen = { version = "8.3.1", features = ["build", "git", "gitcl"] }

@@ -1,331 +1,228 @@
 use std::{
-    fmt::Debug,
-    fs::File,
-    io::Read,
-    path::Path,
-    sync::atomic::{AtomicBool, AtomicU16, Ordering},
+    io::{self, Read},
+    mem::{self, MaybeUninit},
+    num::ParseIntError,
+    ptr,
+    sync::OnceLock,
+    thread,
 };
 
-use ::log::{debug, error, info};
-use anyhow::{anyhow, Result};
-use log::warn;
-use serde::de::DeserializeOwned;
-use widestring::U16CString;
+use ini::Ini;
+use log::{debug, error, info};
+use snafu::{prelude::Snafu, ResultExt};
 use winapi::{
-    ctypes::c_void,
-    shared::minwindef::{BOOL, DWORD, FALSE, LPCVOID, LPDWORD, LPVOID, MAX_PATH},
-    um::{errhandlingapi::GetLastError, winbase::GetPrivateProfileStringW, winhttp::HINTERNET},
+    shared::minwindef::{BOOL, DWORD, LPCVOID, LPDWORD},
+    um::{
+        errhandlingapi::GetLastError,
+        libloaderapi::GetModuleHandleW,
+        processthreadsapi::GetCurrentProcess,
+        psapi::{GetModuleInformation, MODULEINFO},
+        winhttp::{HINTERNET, WINHTTP_OPTION_URL},
+    },
 };
 
 use crate::{
-    configuration::{Configuration, GeneralConfiguration},
-    handlers::score_handler,
+    config::{ConfigLoadError, SaekawaConfig},
     helpers::{
-        decrypt_aes256_cbc, is_encrypted_endpoint, is_endpoint, read_hinternet_url,
-        read_hinternet_user_agent, read_maybe_compressed_buffer, read_slice, request_tachi,
+        chuni_encoding::{decrypt_aes256_cbc, hash_endpoint, maybe_decompress_buffer},
+        winapi_ext::{winhttp_query_option, ReadStringFnError},
     },
-    icf::{decode_icf, IcfData},
-    types::{
-        game::{UpsertUserAllRequest, UserMusicResponse},
-        tachi::{StatusCheck, TachiResponse, ToTachiImport},
-    },
-    CONFIGURATION, GET_USER_MUSIC_API_ENCRYPTED, TACHI_STATUS_URL, UPSERT_USER_ALL_API_ENCRYPTED,
+    score_import::execute_score_import,
+    sigscan::{self, CryptoKeys},
+    types::{chuni::UpsertUserAllRequest, ToBatchManual},
 };
 
-pub static GAME_MAJOR_VERSION: AtomicU16 = AtomicU16::new(0);
-pub static PB_IMPORTED: AtomicBool = AtomicBool::new(true);
+#[derive(Debug, Snafu)]
+pub enum HookError {
+    #[snafu(display("Could not load configuration"))]
+    ConfigError { source: ConfigLoadError },
 
-pub fn hook_init() -> Result<()> {
-    if !CONFIGURATION.general.enable {
-        return Ok(());
-    }
+    #[snafu(display("No cards were configured in the [cards] section. There is nothing to export to. Add tokens under the cards section with the format `\"access_code\" = \"tachi_api_key\"`. If you wish to export scores from all cards, use `default` in place of an access code."))]
+    NoCardsError,
 
-    if CONFIGURATION.general.export_pbs {
-        warn!("===============================================================================");
-        warn!("Exporting PBs is enabled. This should only be used once to sync up your scores!");
-        warn!("Leaving it on can make your profile messy! This will be automatically be turned off after exporting is finished.");
-        warn!("You can check when it's done by searching for the message 'Submitting x scores from user ID xxxxx'.");
-        warn!("===============================================================================");
+    #[snafu(display("An error occured hooking the underlying functions"))]
+    CrochetError { source: crochet::detour::Error },
 
-        PB_IMPORTED.store(false, Ordering::SeqCst);
-    }
+    #[snafu(display("The game version specified in project.conf is not a number."))]
+    InvalidVersion { source: ParseIntError },
 
-    debug!("Retrieving AMFS path from segatools.ini");
+    #[snafu(display("An error occured parsing project.conf"))]
+    IniError { source: ini::Error },
 
-    let mut buf = [0u16; MAX_PATH];
-    let amfs_cfg = unsafe {
-        let sz = GetPrivateProfileStringW(
-            U16CString::from_str_unchecked("vfs").as_ptr(),
-            U16CString::from_str_unchecked("amfs").as_ptr(),
-            U16CString::new().as_ptr(),
-            buf.as_mut_ptr(),
-            MAX_PATH as u32,
-            U16CString::from_str(".\\segatools.ini").unwrap().as_ptr(),
-        );
+    #[snafu(display("An error occured calling a Win32 function: {errno}"))]
+    Win32Error { errno: u32 },
 
-        if sz == 0 {
-            let ec = GetLastError();
-            return Err(anyhow!(
-                "AMFS path not specified in segatools.ini, error code {ec}"
-            ));
-        }
+    #[snafu(display("Could not find a pattern in the game executable"))]
+    CryptoScanError { source: sigscan::CryptoScanError },
 
-        match U16CString::from_ptr(buf.as_ptr(), sz as usize) {
-            Ok(data) => data.to_string_lossy(),
-            Err(err) => {
-                return Err(anyhow!(
-                    "could not read AMFS path from segatools.ini: {:#}",
-                    err
-                ));
-            }
-        }
-    };
-    let amfs_path = Path::new(&amfs_cfg);
-    let icf1_path = amfs_path.join("ICF1");
+    #[snafu(display("The configured path for failed import exists and is not a directory."))]
+    FailedImportNotDir,
 
-    if !icf1_path.exists() {
-        return Err(anyhow!("Could not find ICF1 inside AMFS path. You will probably not be able to network without this file, so this hook will also be disabled."));
-    }
-
-    debug!("Reading ICF1 located at {:?}", icf1_path);
-
-    let mut icf1_buf = {
-        let mut icf1_file = File::open(icf1_path)?;
-        let mut icf1_buf = Vec::new();
-        icf1_file.read_to_end(&mut icf1_buf)?;
-        icf1_buf
-    };
-    let icf = decode_icf(&mut icf1_buf).map_err(|err| anyhow!("Reading ICF failed: {:#}", err))?;
-
-    for entry in icf {
-        if let IcfData::App(app) = entry {
-            info!("Running on {} {}", app.id, app.version);
-            GAME_MAJOR_VERSION.store(app.version.major, Ordering::Relaxed);
-        }
-    }
-
-    debug!("Pinging Tachi API for status check and token verification");
-
-    let resp: TachiResponse<StatusCheck> =
-        request_tachi("GET", TACHI_STATUS_URL.as_str(), None::<()>)?;
-    let user_id = match resp {
-        TachiResponse::Err(err) => {
-            return Err(anyhow!("Tachi API returned an error: {}", err.description));
-        }
-        TachiResponse::Ok(resp) => {
-            if !resp.body.permissions.iter().any(|v| v == "submit_score") {
-                return Err(anyhow!(
-                    "API key has insufficient permissions. The permission submit_score must be set."
-                ));
-            }
-
-            let Some(user_id) = resp.body.whoami else {
-                return Err(anyhow!(
-                    "Status check was successful, yet API returned userID null?"
-                ));
-            };
-
-            user_id
-        }
-    };
-
-    info!("Logged in to Tachi with userID {user_id}");
-
-    debug!("Initializing detours");
-
-    crochet::enable!(winhttpwritedata_hook_wrapper)?;
-
-    if CONFIGURATION.general.export_pbs || cfg!(debug_assertions) {
-        crochet::enable!(winhttpreaddata_hook_wrapper)?;
-    }
-
-    info!("Hook successfully initialized");
-
-    Ok(())
+    #[snafu(display("Could not create the configured directory for failed imports."))]
+    FailedCreatingFailedImportDir { source: io::Error },
 }
 
-pub fn hook_release() -> Result<()> {
-    if !CONFIGURATION.general.enable {
-        return Ok(());
-    }
+#[derive(Debug, Snafu)]
+pub enum ProcessRequestError {
+    #[snafu(display("Could not read URL from HINTERNET handle"))]
+    UrlReadError { source: ReadStringFnError },
 
-    if crochet::is_enabled!(winhttpreaddata_hook_wrapper) {
-        crochet::disable!(winhttpreaddata_hook_wrapper)?;
-    }
+    #[snafu(display("The URL does not have an endpoint"))]
+    UrlMissingEndpointError,
 
-    if crochet::is_enabled!(winhttpwritedata_hook_wrapper) {
-        crochet::disable!(winhttpwritedata_hook_wrapper)?;
-    }
+    #[snafu(display(
+        "Hooked function was called before all necessary state has been initialized"
+    ))]
+    UninitializedError,
 
-    Ok(())
+    #[snafu(display("Could not read request body"))]
+    ReadBodyError { source: io::Error },
 }
 
-#[crochet::hook(compile_check, "winhttp.dll", "WinHttpReadData")]
-fn winhttpreaddata_hook_wrapper(
-    h_request: HINTERNET,
-    lp_buffer: LPVOID,
-    dw_number_of_bytes_to_read: DWORD,
-    lpdw_number_of_bytes_read: LPDWORD,
-) -> BOOL {
-    debug!("hit winhttpreaddata");
+#[derive(Debug, Clone)]
+struct GameInformation {
+    pub game_id: String,
+    pub major: u16,
+    pub minor: u8,
+    pub build: u8,
+}
 
-    let result = call_original!(
-        h_request,
-        lp_buffer,
-        dw_number_of_bytes_to_read,
-        lpdw_number_of_bytes_read
+/// This is used by the Tachi <-> CHUNITHM conversion functions,
+/// because some enum indexes changed between CHUNITHM and CHUNITHM NEW,
+/// namely difficulty, and later on, clear lamps.
+static GAME_MAJOR_VERSION: OnceLock<u16> = OnceLock::new();
+static CRYPTO_KEYS: OnceLock<CryptoKeys> = OnceLock::new();
+static UPSERT_USER_ALL_API: OnceLock<String> = OnceLock::new();
+
+static CONFIG: OnceLock<SaekawaConfig> = OnceLock::new();
+
+pub fn hook_init() -> Result<(), HookError> {
+    info!("Reading hook configuration");
+    let config = SaekawaConfig::load().context(ConfigSnafu)?;
+
+    if config.cards.is_empty() {
+        return Err(HookError::NoCardsError);
+    }
+
+    info!("Loaded tokens for {} access codes", config.cards.len());
+
+    if let Some(d) = &config.general.failed_import_dir {
+        if d.exists() && !d.is_dir() {
+            return Err(HookError::FailedImportNotDir);
+        }
+
+        if !d.exists() {
+            std::fs::create_dir_all(d).context(FailedCreatingFailedImportDirSnafu)?;
+        }
+    }
+
+    CONFIG
+        .set(config)
+        .expect("OnceLock shouldn't be initialized.");
+
+    debug!("Reading version information from project.conf");
+    let info = get_project_conf()?;
+
+    info!(
+        "Running on {} {}.{}.{}",
+        info.game_id, info.major, info.minor, info.build
     );
 
-    if result == FALSE {
-        let ec = unsafe { GetLastError() };
-        error!("Calling original WinHttpReadData function failed: {ec}");
-        return result;
+    let ver = determine_major_version(&info);
+
+    debug!("Game's major version is {ver}");
+
+    GAME_MAJOR_VERSION
+        .set(ver)
+        .expect("OnceLock shouldn't be initialized.");
+
+    debug!("Checking if network requests are encrypted");
+    setup_network_encryption(&info)?;
+
+    info!("Enabling hooks");
+    crochet::enable!(winhttpwritedata_hook).context(CrochetSnafu)?;
+
+    Ok(())
+}
+
+pub fn hook_release() -> Result<(), HookError> {
+    if crochet::is_enabled!(winhttpwritedata_hook) {
+        info!("Disabling hooks");
+        crochet::disable!(winhttpwritedata_hook).context(CrochetSnafu)?;
     }
 
-    let pb_imported = PB_IMPORTED.load(Ordering::SeqCst);
-    if cfg!(not(debug_assertions)) && pb_imported {
-        return result;
-    }
-
-    if let Err(err) = winhttprwdata_hook::<UserMusicResponse>(
-        h_request,
-        lp_buffer,
-        dw_number_of_bytes_to_read,
-        "GetUserMusicApi",
-        &GET_USER_MUSIC_API_ENCRYPTED,
-        move |_| {
-            if pb_imported {
-                return false;
-            }
-
-            PB_IMPORTED.store(true, Ordering::Relaxed);
-            if let Err(err) = Configuration::update(Configuration {
-                general: GeneralConfiguration {
-                    export_pbs: false,
-                    ..CONFIGURATION.general
-                },
-                cards: CONFIGURATION.cards.clone(),
-                crypto: CONFIGURATION.crypto.clone(),
-                tachi: CONFIGURATION.tachi.clone(),
-            }) {
-                error!("Could not update configuration to disable exporting PBs: {err:?}");
-            }
-
-            true
-        },
-    ) {
-        error!("{err:?}");
-    }
-
-    result
+    Ok(())
 }
 
 #[crochet::hook(compile_check, "winhttp.dll", "WinHttpWriteData")]
-fn winhttpwritedata_hook_wrapper(
-    h_request: HINTERNET,
+fn winhttpwritedata_hook(
+    hrequest: HINTERNET,
     lp_buffer: LPCVOID,
-    dw_number_of_bytes_to_write: DWORD,
-    lpdw_number_of_bytes_written: LPDWORD,
+    dw_n_bytes_to_write: DWORD,
+    lpdw_n_bytes_written: LPDWORD,
 ) -> BOOL {
-    debug!("hit winhttpwritedata");
-
-    if let Err(err) = winhttprwdata_hook::<UpsertUserAllRequest>(
-        h_request,
-        lp_buffer,
-        dw_number_of_bytes_to_write,
-        "UpsertUserAllApi",
-        &UPSERT_USER_ALL_API_ENCRYPTED,
-        |upsert_req| {
-            let user_data = &upsert_req.upsert_user_all.user_data[0];
-            let access_code = &user_data.access_code;
-            if !CONFIGURATION.cards.whitelist.is_empty()
-                && !CONFIGURATION.cards.whitelist.contains(access_code)
-            {
-                info!("Card {access_code} is not whitelisted, skipping score submission");
-                return false;
-            }
-
-            true
-        },
-    ) {
-        error!("{err:?}");
+    if let Err(e) = process_request(hrequest, lp_buffer, dw_n_bytes_to_write) {
+        error!("{e:#?}");
     }
 
     call_original!(
-        h_request,
+        hrequest,
         lp_buffer,
-        dw_number_of_bytes_to_write,
-        lpdw_number_of_bytes_written
+        dw_n_bytes_to_write,
+        lpdw_n_bytes_written
     )
 }
 
-/// Common hook for WinHttpWriteData/WinHttpReadData. The flow is similar for both
-/// hooks:
-/// - Read URL and User-Agent from the handle
-/// - Extract the API method from the URL, and exit if it's not the method we're
-/// looking for
-/// - Determine if the API is encrypted, and exit if it is and we don't have keys
-/// - Parse the body and convert it to Tachi's BATCH-MANUAL
-/// - Submit it off to Tachi, if our guard function (which takes the parsed body) allows so.
-fn winhttprwdata_hook<'a, T: Debug + DeserializeOwned + ToTachiImport + 'static>(
-    handle: HINTERNET,
-    buffer: *const c_void,
-    bufsz: DWORD,
-    unencrypted_endpoint: &str,
-    encrypted_endpoint: &Option<String>,
-    guard_fn: impl Fn(&T) -> bool + Send + 'static,
-) -> Result<()> {
-    let url = read_hinternet_url(handle)?;
-    let user_agent = read_hinternet_user_agent(handle)?;
-    debug!("user-agent {user_agent}, URL: {url}");
+fn process_request(
+    hrequest: HINTERNET,
+    buffer: LPCVOID,
+    bufsiz: DWORD,
+) -> Result<(), ProcessRequestError> {
+    let url = winhttp_query_option(hrequest, WINHTTP_OPTION_URL).context(UrlReadSnafu)?;
 
-    let maybe_endpoint = url
+    debug!("Captured request to {url}");
+
+    let endpoint = url
         .split('/')
         .last()
-        .ok_or(anyhow!("Could not extract last part of a split URL"))?;
+        .ok_or(ProcessRequestError::UrlMissingEndpointError)?;
+    let upsert_user_all_endpoint = UPSERT_USER_ALL_API
+        .get()
+        .ok_or(ProcessRequestError::UninitializedError)?;
 
-    let is_encrypted = is_encrypted_endpoint(maybe_endpoint);
-
-    let endpoint = if is_encrypted && user_agent.contains('#') {
-        user_agent
-            .split('#')
-            .next()
-            .ok_or(anyhow!("there should be at least one item in the split"))?
-    } else {
-        maybe_endpoint
-    };
-
-    let is_correct_endpoint = is_endpoint(endpoint, unencrypted_endpoint, encrypted_endpoint);
-    if cfg!(not(debug_assertions)) && !is_correct_endpoint {
+    if endpoint != upsert_user_all_endpoint {
         return Ok(());
     }
 
-    if is_encrypted && (CONFIGURATION.crypto.key.is_empty() || CONFIGURATION.crypto.iv.is_empty()) {
-        return Err(anyhow!("Communications with the server is encrypted, but no keys were provided. Fill in the keys by editing 'saekawa.toml'."));
+    let mut raw_body_slice =
+        unsafe { std::slice::from_raw_parts(buffer as *const u8, bufsiz as usize) };
+    let mut raw_body = Vec::with_capacity(bufsiz as usize);
+
+    raw_body_slice
+        .read_to_end(&mut raw_body)
+        .context(ReadBodySnafu)?;
+
+    #[cfg(debug_assertions)]
+    {
+        debug!("raw request: {}", faster_hex::hex_string(&raw_body));
     }
 
-    let mut raw_body = match read_slice(buffer as *const u8, bufsz as usize) {
-        Ok(data) => data,
-        Err(err) => {
-            return Err(anyhow!(
-                "There was an error reading the response body: {:#}",
-                err
-            ));
-        }
-    };
+    thread::spawn(move || {
+        let Some(config) = CONFIG.get() else {
+            error!("Config has not been initialized?");
+            return;
+        };
 
-    debug!("raw body: {}", faster_hex::hex_string(&raw_body));
+        let Some(major_version) = GAME_MAJOR_VERSION.get() else {
+            error!("The game's major version is not known?");
+            return;
+        };
 
-    std::thread::spawn(move || {
-        let compressed_body = if is_encrypted {
-            match decrypt_aes256_cbc(
-                &mut raw_body,
-                &CONFIGURATION.crypto.key,
-                &CONFIGURATION.crypto.iv,
-            ) {
-                Ok(res) => res,
-                Err(err) => {
-                    error!("Could not decrypt response: {:#}", err);
+        let compressed_body = if let Some(keys) = CRYPTO_KEYS.get() {
+            match decrypt_aes256_cbc(&mut raw_body, &keys.key, &keys.iv) {
+                Ok(r) => r,
+                Err(e) => {
+                    error!("Could not decrypt request: {e:#?}");
                     return;
                 }
             }
@@ -333,23 +230,171 @@ fn winhttprwdata_hook<'a, T: Debug + DeserializeOwned + ToTachiImport + 'static>
             raw_body
         };
 
-        let body = match read_maybe_compressed_buffer(&compressed_body[..]) {
-            Ok(data) => data,
-            Err(err) => {
-                error!("There was an error decoding the request body: {:#}", err);
+        let body = match maybe_decompress_buffer(&compressed_body) {
+            Ok(s) => s,
+            Err(e) => {
+                error!("Could not read request as DEFLATE-compressed or plaintext: {e:#?}");
                 return;
             }
         };
 
-        debug!("decoded response body: {body}");
-
-        // Hit in debug build
-        if !is_correct_endpoint {
-            return;
+        #[cfg(debug_assertions)]
+        {
+            debug!("decoded request: {}", body.trim());
         }
 
-        score_handler::<T>(body, guard_fn)
+        let data = match serde_json::from_str::<UpsertUserAllRequest>(&body) {
+            Ok(d) => d,
+            Err(e) => {
+                error!("Could not parse request: {e:#?}");
+                return;
+            }
+        };
+
+        let user_data = &data.upsert_user_all.user_data[0];
+        let access_code = &user_data.access_code;
+        let Some(tachi_api_key) = config
+            .cards
+            .get(access_code)
+            .or_else(|| config.cards.get("default"))
+        else {
+            info!("No API keys was assigned to {access_code}, and no default API key was set, skipping score submission.");
+            return;
+        };
+
+        let import = data.to_batch_manual(
+            *major_version,
+            config.general.export_class,
+            config.general.fail_over_lamp,
+        );
+
+        if let Err(e) = execute_score_import(import, access_code, &tachi_api_key, &config) {
+            error!("{e}");
+        }
     });
+
+    Ok(())
+}
+
+fn get_project_conf() -> Result<GameInformation, HookError> {
+    let project_conf = Ini::load_from_file("./project.conf").context(IniSnafu)?;
+    let major_version = &project_conf["Version"]["VerMajor"];
+    let minor_version = &project_conf["Version"]["VerMinor"];
+    let build_version = &project_conf["Version"]["VerRelease"];
+    let game_id = &project_conf["Project"]["GameID"];
+
+    Ok(GameInformation {
+        game_id: game_id.to_string(),
+        major: major_version.parse::<u16>().context(InvalidVersionSnafu)?,
+        minor: minor_version.parse::<u8>().context(InvalidVersionSnafu)?,
+        build: build_version.parse::<u8>().context(InvalidVersionSnafu)?,
+    })
+}
+
+fn determine_major_version(info: &GameInformation) -> u16 {
+    if info.game_id == "SDGS" {
+        if info.minor < 10 {
+            1
+        } else {
+            2
+        }
+    } else {
+        info.major
+    }
+}
+
+fn setup_network_encryption(info: &GameInformation) -> Result<(), HookError> {
+    debug!("Getting module information of the game process");
+    let mut modinfo: MaybeUninit<MODULEINFO> = MaybeUninit::uninit();
+    let result = unsafe {
+        GetModuleInformation(
+            GetCurrentProcess(),
+            GetModuleHandleW(ptr::null_mut()),
+            modinfo.as_mut_ptr(),
+            mem::size_of::<MODULEINFO>() as u32,
+        )
+    };
+
+    if result == 0 {
+        let err = unsafe { GetLastError() };
+
+        error!("Could not get information about the game process, error code {err}");
+        return Err(HookError::Win32Error { errno: err });
+    }
+
+    let modinfo = unsafe { modinfo.assume_init() };
+    debug!(
+        "Base address: {:p}, image size: {:x}",
+        modinfo.lpBaseOfDll, modinfo.SizeOfImage
+    );
+
+    debug!("Scanning game for encryption status");
+    let encryption_enabled = unsafe {
+        sigscan::is_network_encrypted(modinfo.lpBaseOfDll as *const _, modinfo.SizeOfImage as _)
+            .context(CryptoScanSnafu)?
+    };
+
+    let endpoint = if info.game_id == "SDGS" {
+        if info.minor < 10 {
+            "UpsertUserAllApiExp"
+        } else {
+            "UpsertUserAllApiC3Exp"
+        }
+    } else {
+        "UpsertUserAllApi"
+    };
+
+    if encryption_enabled {
+        info!("Network requests are encrypted.");
+
+        debug!("Searching for encryption keys. This might take a bit...");
+
+        let keys = unsafe {
+            sigscan::get_crypto_keys(modinfo.lpBaseOfDll as *const _, modinfo.SizeOfImage as _)
+                .context(CryptoScanSnafu)?
+        };
+
+        info!("Search completed successfully.");
+
+        #[cfg(debug_assertions)]
+        {
+            debug!(
+                "Key: {}, IV: {}, salt: {}, iterations: {}",
+                faster_hex::hex_string(&keys.key),
+                faster_hex::hex_string(&keys.iv),
+                faster_hex::hex_string(&keys.salt),
+                keys.iterations,
+            )
+        }
+
+        // For some reason, CHUNITHM SUPERSTAR/SUPERSTAR+ forgot to add "Exp" when
+        // hashing the endpoint.
+        let endpoint_password = if info.game_id == "SDGS" && info.minor < 10 {
+            "UpsertUserAllApi"
+        } else {
+            endpoint
+        };
+
+        let hashed_endpoint = hash_endpoint(endpoint_password, &keys.salt, keys.iterations);
+
+        debug!(
+            "Hashed {endpoint_password} with {:#?} to {hashed_endpoint}",
+            keys.salt
+        );
+
+        UPSERT_USER_ALL_API
+            .set(hashed_endpoint)
+            .expect("OnceLock shouldn't be initialized.");
+        CRYPTO_KEYS
+            .set(keys)
+            .expect("OnceLock shouldn't be initialized.");
+    } else {
+        info!("Network requests are not encrypted.");
+
+        UPSERT_USER_ALL_API
+            .set(endpoint.to_string())
+            .expect("OnceLock shouldn't be initialized.");
+    }
 
     Ok(())
 }
