@@ -194,6 +194,8 @@ fn process_request(
         return Ok(());
     }
 
+    info!("Received profile upsert request. Initiating score import...");
+
     let mut raw_body_slice =
         unsafe { std::slice::from_raw_parts(buffer as *const u8, bufsiz as usize) };
     let mut raw_body = Vec::with_capacity(bufsiz as usize);
@@ -258,7 +260,7 @@ fn process_request(
             .get(access_code)
             .or_else(|| config.cards.get("default"))
         else {
-            info!("No API keys was assigned to {access_code}, and no default API key was set, skipping score submission.");
+            info!("No API keys was assigned to {access_code}, and no default API key was set, skipping score import.");
             return;
         };
 
