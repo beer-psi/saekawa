@@ -29,7 +29,8 @@ use crate::{
     },
     score_import::execute_score_import,
     sigscan::{self, CryptoKeys},
-    types::{chuni::UpsertUserAllRequest, ToBatchManual}, updater::self_update,
+    types::{chuni::UpsertUserAllRequest, ToBatchManual},
+    updater::self_update,
 };
 
 #[derive(Debug, Snafu)]

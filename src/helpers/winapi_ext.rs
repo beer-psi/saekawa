@@ -5,10 +5,18 @@ use widestring::U16CString;
 use winapi::{
     ctypes::c_void,
     shared::{
-        minwindef::{FALSE, HINSTANCE, HMODULE, TRUE}, ntdef::HANDLE, winerror::ERROR_INSUFFICIENT_BUFFER
+        minwindef::{FALSE, HINSTANCE, HMODULE, TRUE},
+        ntdef::HANDLE,
+        winerror::ERROR_INSUFFICIENT_BUFFER,
     },
     um::{
-        errhandlingapi::GetLastError, handleapi::{CloseHandle, DuplicateHandle}, libloaderapi::{FreeLibraryAndExitThread, GetModuleFileNameW}, processthreadsapi::{GetCurrentProcess, GetCurrentThread}, synchapi::WaitForSingleObject, winhttp::{WinHttpQueryOption, HINTERNET}, winnt::SYNCHRONIZE
+        errhandlingapi::GetLastError,
+        handleapi::{CloseHandle, DuplicateHandle},
+        libloaderapi::{FreeLibraryAndExitThread, GetModuleFileNameW},
+        processthreadsapi::{GetCurrentProcess, GetCurrentThread},
+        synchapi::WaitForSingleObject,
+        winhttp::{WinHttpQueryOption, HINTERNET},
+        winnt::SYNCHRONIZE,
     },
 };
 

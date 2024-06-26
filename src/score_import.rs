@@ -81,19 +81,25 @@ pub fn execute_score_import(
                 return Err(ScoreImportError::MaxRetriesExhausted { max_retries });
             };
 
-            info!("Saving batch manual JSON to configured failed import directory for later import.");
-            
+            info!(
+                "Saving batch manual JSON to configured failed import directory for later import."
+            );
+
             let current_time = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S");
             let failed_import_filename =
                 d.join(format!("saekawa_{}_{}.json", access_code, current_time));
 
             {
-                let file = File::create(&failed_import_filename).context(FailedCreatingBackupSnafu)?;
+                let file =
+                    File::create(&failed_import_filename).context(FailedCreatingBackupSnafu)?;
                 serde_json::to_writer_pretty(file, &import).context(FailedWritingBackupSnafu)?;
             }
 
-            info!("Saved batch manual JSON to {}", failed_import_filename.to_string_lossy());
-            
+            info!(
+                "Saved batch manual JSON to {}",
+                failed_import_filename.to_string_lossy()
+            );
+
             return Ok(());
         }
         Err(e) => return Err(e),

@@ -42,7 +42,7 @@ use winapi::{
         },
         wintrust::{
             WinVerifyTrust, WINTRUST_DATA, WINTRUST_FILE_INFO, WTD_CHOICE_FILE, WTD_REVOKE_NONE,
-            WTD_STATEACTION_VERIFY, WTD_UI_NONE,
+            WTD_STATEACTION_CLOSE, WTD_STATEACTION_VERIFY, WTD_UI_NONE,
         },
     },
 };
@@ -425,34 +425,40 @@ fn validate_sha256(data: &[u8], expected: &str) -> Result<(), SelfUpdateError> {
 fn verify_signature(file: &str) -> Result<(), VerifySignatureError> {
     let file_osstr = U16CString::from_str_truncate(file);
     let mut verification_type = WINTRUST_ACTION_GENERIC_VERIFY_V2;
-    let mut wintrust_data_buf = vec![0u8; mem::size_of::<WINTRUST_DATA>()];
-    let mut fileinfo_buf = vec![0u8; mem::size_of::<WINTRUST_FILE_INFO>()];
 
     unsafe {
-        let fileinfo = fileinfo_buf.as_mut_ptr() as *mut WINTRUST_FILE_INFO;
-        let wintrust_data = wintrust_data_buf.as_mut_ptr() as *mut WINTRUST_DATA;
+        let mut fileinfo = mem::zeroed::<WINTRUST_FILE_INFO>();
+        let mut wintrust_data = mem::zeroed::<WINTRUST_DATA>();
 
-        (*fileinfo).cbStruct = mem::size_of::<WINTRUST_FILE_INFO>() as u32;
-        (*fileinfo).pcwszFilePath = file_osstr.as_ptr();
-        (*fileinfo).hFile = ptr::null_mut();
-        (*fileinfo).pgKnownSubject = ptr::null_mut();
+        fileinfo.cbStruct = mem::size_of::<WINTRUST_FILE_INFO>() as u32;
+        fileinfo.pcwszFilePath = file_osstr.as_ptr();
+        fileinfo.hFile = ptr::null_mut();
+        fileinfo.pgKnownSubject = ptr::null_mut();
 
-        (*wintrust_data).pPolicyCallbackData = ptr::null_mut();
-        (*wintrust_data).pSIPClientData = ptr::null_mut();
-        (*wintrust_data).cbStruct = mem::size_of::<WINTRUST_DATA>() as u32;
-        (*wintrust_data).dwStateAction = WTD_STATEACTION_VERIFY;
-        (*wintrust_data).dwUIChoice = WTD_UI_NONE;
-        (*wintrust_data).fdwRevocationChecks = WTD_REVOKE_NONE;
-        (*wintrust_data).dwUnionChoice = WTD_CHOICE_FILE;
-        (*wintrust_data).hWVTStateData = ptr::null_mut();
-        (*wintrust_data).pwszURLReference = ptr::null_mut();
-        (*wintrust_data).dwUIContext = 0;
-        *(*wintrust_data).u.pFile_mut() = fileinfo;
+        wintrust_data.pPolicyCallbackData = ptr::null_mut();
+        wintrust_data.pSIPClientData = ptr::null_mut();
+        wintrust_data.cbStruct = mem::size_of::<WINTRUST_DATA>() as u32;
+        wintrust_data.dwStateAction = WTD_STATEACTION_VERIFY;
+        wintrust_data.dwUIChoice = WTD_UI_NONE;
+        wintrust_data.fdwRevocationChecks = WTD_REVOKE_NONE;
+        wintrust_data.dwUnionChoice = WTD_CHOICE_FILE;
+        wintrust_data.hWVTStateData = ptr::null_mut();
+        wintrust_data.pwszURLReference = ptr::null_mut();
+        wintrust_data.dwUIContext = 0;
+        *wintrust_data.u.pFile_mut() = &mut fileinfo as *mut _;
 
         let status = WinVerifyTrust(
             ptr::null_mut(),
             &mut verification_type,
-            wintrust_data as *mut _,
+            &mut wintrust_data as *mut _ as _,
+        );
+
+        wintrust_data.dwStateAction = WTD_STATEACTION_CLOSE;
+
+        WinVerifyTrust(
+            ptr::null_mut(),
+            &mut verification_type,
+            &mut wintrust_data as *mut _ as _,
         );
 
         match status {
@@ -535,13 +541,14 @@ fn get_signature_pubkey(file: &str) -> Result<Vec<u8>, GetSignaturePubkeyError> 
         });
     }
 
-    let mut cert_search_params_buf = vec![0u8; mem::size_of::<CERT_INFO>()];
-    let cert_search_params = cert_search_params_buf.as_mut_ptr() as *mut CERT_INFO;
+    let cert_search_params = unsafe {
+        let mut csp = mem::zeroed::<CERT_INFO>();
 
-    unsafe {
-        (*cert_search_params).Issuer = (*signer_info).Issuer;
-        (*cert_search_params).SerialNumber = (*signer_info).SerialNumber;
-    }
+        csp.Issuer = (*signer_info).Issuer;
+        csp.SerialNumber = (*signer_info).SerialNumber;
+
+        csp
+    };
 
     let cert = unsafe {
         CertFindCertificateInStore(
@@ -549,7 +556,7 @@ fn get_signature_pubkey(file: &str) -> Result<Vec<u8>, GetSignaturePubkeyError> 
             X509_ASN_ENCODING | PKCS_7_ASN_ENCODING,
             0,
             CERT_FIND_SUBJECT_CERT,
-            cert_search_params as *const _,
+            &cert_search_params as *const _ as _,
             ptr::null(),
         )
     };
