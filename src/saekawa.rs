@@ -397,7 +397,7 @@ fn setup_network_encryption(info: &GameInformation) -> Result<(), HookError> {
         let hashed_endpoint = hash_endpoint(endpoint_password, &keys.salt, keys.iterations);
 
         debug!(
-            "Hashed {endpoint_password} with {:#?} to {hashed_endpoint}",
+            "Hashed {endpoint_password} with {:x?} to {hashed_endpoint}",
             keys.salt
         );
 
