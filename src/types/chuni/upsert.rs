@@ -1,7 +1,8 @@
+use chrono::NaiveDateTime;
 use serde::{Deserialize, Serialize};
 use serde_aux::prelude::*;
 
-use super::deserialize_bool;
+use super::{deserialize_bool, serde_user_play_date};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -46,15 +47,17 @@ pub struct UserDataEx {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UserPlaylog {
-    // This decides what `level` indices mean.
-    // rom version 1.xx.yy: 0->4 for BASIC/ADVANCED/EXPERT/MASTER/WORLD'S END
-    // rom version 2.xx.yy: 0->5 for BASIC/ADVANCED/EXPERT/MASTER/ULTIMA/WORLD'S END
+    /// This decides what `level` indices mean.
+    /// rom version 1.xx.yy: 0->4 for BASIC/ADVANCED/EXPERT/MASTER/WORLD'S END
+    /// rom version 2.xx.yy: 0->5 for BASIC/ADVANCED/EXPERT/MASTER/ULTIMA/WORLD'S END
     pub rom_version: String,
 
     pub music_id: String,
 
-    // This is in UTC+9
-    pub user_play_date: String,
+    /// The date and time the player set this score with, in the local time
+    /// perceived by the game. On most setups this will be UTC+9.
+    #[serde(with = "serde_user_play_date")]
+    pub user_play_date: NaiveDateTime,
 
     #[serde(deserialize_with = "deserialize_number_from_string")]
     pub level: u32,
@@ -90,6 +93,10 @@ pub struct UserPlaylog {
     #[serde(deserialize_with = "deserialize_bool")]
     pub is_full_combo: bool,
 
+    /// In CHUNITHM SUN+ and beyond this is actually an integer, with different
+    /// indexes for different clear lamps, ranging from a normal CLEAR to a CATASTROPHY
+    /// (similar to EX HARD CLEAR). To keep things simple it's all smushed to a boolean,
+    /// since Tachi doesn't implement those clear lamps.
     #[serde(deserialize_with = "deserialize_bool")]
     pub is_clear: bool,
 }

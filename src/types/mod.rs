@@ -1,7 +1,7 @@
 pub mod chuni;
 pub mod tachi;
 
-use chrono::{FixedOffset, NaiveDateTime, TimeZone};
+use chrono::{FixedOffset, TimeZone};
 use num_enum::TryFromPrimitiveError;
 use snafu::{ResultExt, Snafu};
 
@@ -20,9 +20,6 @@ pub enum ScoreConversionError {
     InvalidDifficulty {
         source: TryFromPrimitiveError<Difficulty>,
     },
-
-    #[snafu(display("Invalid play date."))]
-    InvalidPlayDate { source: chrono::format::ParseError },
 }
 
 impl UserPlaylog {
@@ -60,10 +57,8 @@ impl UserPlaylog {
             Difficulty::try_from(self.level).context(InvalidDifficultySnafu)?
         };
 
-        let datetime = NaiveDateTime::parse_from_str(&self.user_play_date, "%Y-%m-%d %H:%M:%S")
-            .context(InvalidPlayDateSnafu)?;
         let jst_offset = FixedOffset::east_opt(9 * 3600).expect("chrono should parse JST timezone");
-        let jst_time = jst_offset.from_local_datetime(&datetime).unwrap();
+        let jst_time = jst_offset.from_local_datetime(&self.user_play_date).unwrap();
 
         Ok(BatchManualScore {
             score: self.score,

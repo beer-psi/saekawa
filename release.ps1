@@ -1,3 +1,5 @@
+Write-Output "Generating release for git SHA $(git rev-parse HEAD)"
+
 cargo build --target i686-pc-windows-msvc --release
 
 if (!(Test-Path ./saekawa.pfx)) {
