@@ -1,4 +1,5 @@
 mod config;
+mod consts;
 mod helpers;
 mod logging;
 mod saekawa;
@@ -9,7 +10,6 @@ mod updater;
 
 use std::thread;
 
-use helpers::winapi_ext::ThreadHandle;
 use log::{error, info, warn};
 use winapi::{
     shared::minwindef::{BOOL, DWORD, HINSTANCE, LPVOID, TRUE},
@@ -17,7 +17,8 @@ use winapi::{
 };
 
 use crate::{
-    helpers::winapi_ext::LibraryHandle,
+    consts::{CRATE_NAME, CRATE_VERSION, GIT_BRANCH, GIT_SHA},
+    helpers::winapi_ext::{LibraryHandle, ThreadHandle},
     logging::init_logger,
     saekawa::{hook_init, hook_release},
 };
@@ -38,10 +39,11 @@ extern "system" fn DllMain(dll_module: HINSTANCE, call_reason: DWORD, reserved: 
                 }
 
                 info!(
-                    "saekawa {} ({}@{}) starting up...",
-                    env!("CARGO_PKG_VERSION"),
-                    &env!("VERGEN_GIT_SHA")[0..7],
-                    env!("VERGEN_GIT_BRANCH"),
+                    "{} {} ({}@{}) starting up...",
+                    CRATE_NAME,
+                    CRATE_VERSION,
+                    &GIT_SHA[0..7],
+                    GIT_BRANCH,
                 );
 
                 if let Err(e) = hook_init(library_handle) {

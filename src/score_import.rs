@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use snafu::{prelude::Snafu, ResultExt};
 
 use crate::{
+    consts::USER_AGENT,
     config::SaekawaConfig,
     types::tachi::{
         api::{TachiFailureResponse, TachiResponse},
@@ -16,7 +17,6 @@ use crate::{
 };
 
 const MAX_RETRY_COUNT: u32 = 3;
-static SAEKAWA_USER_AGENT: &str = concat!("saekawa/", env!("CARGO_PKG_VERSION"));
 
 #[derive(Snafu, Debug)]
 pub enum ScoreImportError {
@@ -126,7 +126,7 @@ pub fn execute_score_import(
 fn saekawa_client(config: &SaekawaConfig) -> ureq::Agent {
     ureq::builder()
         .timeout(Duration::from_millis(config.general.timeout))
-        .user_agent(SAEKAWA_USER_AGENT)
+        .user_agent(USER_AGENT)
         .build()
 }
 
