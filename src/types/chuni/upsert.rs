@@ -23,10 +23,16 @@ pub struct UpsertUserAllBody {
 pub struct UserData {
     pub access_code: String,
 
-    #[serde(deserialize_with = "deserialize_option_number_from_string")]
+    #[serde(
+        default = "default_class_emblem",
+        deserialize_with = "deserialize_option_number_from_string",
+    )]
     pub class_emblem_base: Option<u32>,
 
-    #[serde(deserialize_with = "deserialize_option_number_from_string")]
+    #[serde(
+        default = "default_class_emblem",
+        deserialize_with = "deserialize_option_number_from_string"
+    )]
     pub class_emblem_medal: Option<u32>,
 }
 
@@ -90,4 +96,8 @@ pub struct UserPlaylog {
 
 fn default_judge_heaven() -> u32 {
     0
+}
+
+fn default_class_emblem() -> Option<u32> {
+    None
 }
