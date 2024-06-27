@@ -8,8 +8,8 @@ license = "0BSD"
 crate-type = ["cdylib"]
 
 [profile.release]
-strip = true  # Automatically strip symbols from the binary.
-opt-level = "z"  # Optimize for size.
+strip = true      # Automatically strip symbols from the binary.
+opt-level = "z"   # Optimize for size.
 lto = true
 codegen-units = 1
 panic = "abort"
@@ -38,7 +38,26 @@ snafu = "0.8.3"
 ureq = { version = "2.9.7", features = ["json"] }
 url = { version = "2.5.2", features = ["serde"] }
 widestring = "1.1.0"
-winapi = { version = "0.3.9", features = ["minwindef", "winnt", "psapi", "processthreadsapi", "libloaderapi", "errhandlingapi", "winhttp", "synchapi", "debugapi", "wincon", "heapapi", "winbase", "wincrypt", "softpub", "wintrust"] }
+
+[dependencies.winapi]
+version = "0.3.9"
+features = [
+    "minwindef",
+    "winnt",
+    "psapi",
+    "processthreadsapi",
+    "libloaderapi",
+    "errhandlingapi",
+    "winhttp",
+    "synchapi",
+    "debugapi",
+    "wincon",
+    "heapapi",
+    "winbase",
+    "wincrypt",
+    "softpub",
+    "wintrust",
+]
 
 [build-dependencies]
 snafu = "0.8.3"
