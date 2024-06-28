@@ -26,7 +26,7 @@ pub struct UserData {
 
     #[serde(
         default = "default_class_emblem",
-        deserialize_with = "deserialize_option_number_from_string",
+        deserialize_with = "deserialize_option_number_from_string"
     )]
     pub class_emblem_base: Option<u32>,
 

@@ -32,7 +32,7 @@ where
 
 mod serde_user_play_date {
     use chrono::NaiveDateTime;
-    use serde::{ser, de};
+    use serde::{de, ser};
 
     const DT_FORMAT: &str = "%Y-%m-%d %H:%M:%S";
 
@@ -64,8 +64,7 @@ mod serde_user_play_date {
         where
             E: de::Error,
         {
-            NaiveDateTime::parse_from_str(v, DT_FORMAT)
-                .map_err(E::custom)
+            NaiveDateTime::parse_from_str(v, DT_FORMAT).map_err(E::custom)
         }
     }
 }

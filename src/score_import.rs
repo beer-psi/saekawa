@@ -6,8 +6,8 @@ use serde::{Deserialize, Serialize};
 use snafu::{prelude::Snafu, ResultExt};
 
 use crate::{
-    consts::USER_AGENT,
     config::SaekawaConfig,
+    consts::USER_AGENT,
     types::tachi::{
         api::{TachiFailureResponse, TachiResponse},
         api_returns::{ImportPollStatus, ImportResponse},

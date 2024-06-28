@@ -18,7 +18,8 @@ use winapi::{
         minwindef::{BOOL, DWORD, HMODULE, LPVOID, PROC},
         ntdef::{LPCWSTR, LPSTR},
         winerror::{
-            CERT_E_CHAINING, CERT_E_EXPIRED, CERT_E_UNTRUSTEDROOT, CRYPT_E_SECURITY_SETTINGS, TRUST_E_BAD_DIGEST, TRUST_E_EXPLICIT_DISTRUST, TRUST_E_NOSIGNATURE
+            CERT_E_CHAINING, CERT_E_EXPIRED, CERT_E_UNTRUSTEDROOT, CRYPT_E_SECURITY_SETTINGS,
+            TRUST_E_BAD_DIGEST, TRUST_E_EXPLICIT_DISTRUST, TRUST_E_NOSIGNATURE,
         },
     },
     um::{
@@ -172,9 +173,7 @@ struct UpdateInformation {
 /// and the hook should uninject itself so a newer version can load in.
 #[allow(clippy::result_large_err)]
 pub fn self_update(module: &LibraryHandle) -> Result<bool, SelfUpdateError> {
-    let agent = ureq::builder()
-        .user_agent(USER_AGENT)
-        .build();
+    let agent = ureq::builder().user_agent(USER_AGENT).build();
 
     info!("Checking for updates...");
     let response = agent
@@ -371,7 +370,10 @@ pub fn self_update(module: &LibraryHandle) -> Result<bool, SelfUpdateError> {
             let handle = CreateThread(
                 ptr::null_mut(),
                 0,
-                Some(std::mem::transmute::<PROC, unsafe extern "system" fn(*mut winapi::ctypes::c_void) -> u32>(updater_start_address)),
+                Some(std::mem::transmute::<
+                    PROC,
+                    unsafe extern "system" fn(*mut winapi::ctypes::c_void) -> u32,
+                >(updater_start_address)),
                 heap as *mut _,
                 0,
                 ptr::null_mut(),

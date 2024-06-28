@@ -58,7 +58,9 @@ impl UserPlaylog {
         };
 
         let jst_offset = FixedOffset::east_opt(9 * 3600).expect("chrono should parse JST timezone");
-        let jst_time = jst_offset.from_local_datetime(&self.user_play_date).unwrap();
+        let jst_time = jst_offset
+            .from_local_datetime(&self.user_play_date)
+            .unwrap();
 
         Ok(BatchManualScore {
             score: self.score,
