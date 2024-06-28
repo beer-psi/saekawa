@@ -420,19 +420,12 @@ fn verify_signature(file: &str) -> Result<(), VerifySignatureError> {
 
         fileinfo.cbStruct = mem::size_of::<WINTRUST_FILE_INFO>() as u32;
         fileinfo.pcwszFilePath = file_osstr.as_ptr();
-        fileinfo.hFile = ptr::null_mut();
-        fileinfo.pgKnownSubject = ptr::null_mut();
 
-        wintrust_data.pPolicyCallbackData = ptr::null_mut();
-        wintrust_data.pSIPClientData = ptr::null_mut();
         wintrust_data.cbStruct = mem::size_of::<WINTRUST_DATA>() as u32;
         wintrust_data.dwStateAction = WTD_STATEACTION_VERIFY;
         wintrust_data.dwUIChoice = WTD_UI_NONE;
         wintrust_data.fdwRevocationChecks = WTD_REVOKE_NONE;
         wintrust_data.dwUnionChoice = WTD_CHOICE_FILE;
-        wintrust_data.hWVTStateData = ptr::null_mut();
-        wintrust_data.pwszURLReference = ptr::null_mut();
-        wintrust_data.dwUIContext = 0;
         *wintrust_data.u.pFile_mut() = &mut fileinfo as *mut _;
 
         let status = WinVerifyTrust(
