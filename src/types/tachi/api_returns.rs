@@ -23,10 +23,10 @@ pub enum ImportResponse {
     Completed(ImportDocument),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct ImportProgress {
-    description: String,
-    value: i32,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ImportProgress {
+    NotStarted(u32),
+    Ongoing { description: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
