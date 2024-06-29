@@ -346,11 +346,15 @@ pub fn self_update(module: &LibraryHandle) -> Result<bool, SelfUpdateError> {
         debug!("Allocated heap for updater code at {heap:p}");
 
         (*heap).module = module.handle();
+
+        // Prepend "\\?\" to the path to prevent path length limits.
+        (*heap).old[0..4].copy_from_slice(&[0x005C, 0x005C, 0x003F, 0x005C]);
+        (*heap).new[0..4].copy_from_slice(&[0x005C, 0x005C, 0x003F, 0x005C]);
         for (i, c) in module_filename.encode_utf16().enumerate() {
-            (*heap).old[i] = c;
+            (*heap).old[i + 4] = c;
         }
         for (i, c) in new_module_filename.encode_utf16().enumerate() {
-            (*heap).new[i] = c;
+            (*heap).new[i + 4] = c;
         }
 
         let updater_start_address = (replace_with_new_library as PROC)
