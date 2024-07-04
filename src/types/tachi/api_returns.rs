@@ -24,6 +24,7 @@ pub enum ImportResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
 pub enum ImportProgress {
     NotStarted(u32),
     Ongoing { description: String },
