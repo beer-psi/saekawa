@@ -22,7 +22,7 @@ pub static mut REPLCE_FILE_W_PTR: PROC = ptr::null_mut();
 
 #[link_section = ".rtext"]
 #[used]
-pub static mut LOAD_LIBRARY_W_POINTER: PROC = ptr::null_mut();
+pub static mut LOAD_LIBRARY_W_PTR: PROC = ptr::null_mut();
 
 #[link_section = ".rtext"]
 #[used]
@@ -60,7 +60,7 @@ pub unsafe extern "system" fn replace_with_new_library(parameter: *const c_void)
         std::mem::transmute::<PROC, GetModuleFileNameAFn>(GET_MODULE_FILE_NAME_A_PTR);
     let GetProcessHeap = std::mem::transmute::<PROC, GetProcessHeapFn>(GET_PROCESS_HEAP_PTR);
     let ReplaceFileW = std::mem::transmute::<PROC, ReplaceFileWFn>(REPLCE_FILE_W_PTR);
-    let LoadLibraryW = std::mem::transmute::<PROC, LoadLibraryWFn>(LOAD_LIBRARY_W_POINTER);
+    let LoadLibraryW = std::mem::transmute::<PROC, LoadLibraryWFn>(LOAD_LIBRARY_W_PTR);
     let HeapFree = std::mem::transmute::<PROC, HeapFreeFn>(HEAP_FREE_PTR);
     let Sleep = std::mem::transmute::<PROC, SleepFn>(SLEEP_PTR);
 
@@ -86,7 +86,7 @@ pub unsafe extern "system" fn replace_with_new_library(parameter: *const c_void)
         ptr::null_mut(),
     );
 
-    if result > 0 {
+    if result != 0 {
         LoadLibraryW((*args).old.as_ptr());
     } else {
         LoadLibraryW((*args).new.as_ptr());

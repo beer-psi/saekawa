@@ -14,35 +14,26 @@ use snafu::{prelude::Snafu, ResultExt};
 use widestring::U16CString;
 use winapi::{
     shared::{
-        minwindef::{BOOL, DWORD, HMODULE, LPVOID, PROC},
-        ntdef::{LPCWSTR, LPSTR},
+        minwindef::PROC,
         winerror::{
             CERT_E_CHAINING, CERT_E_EXPIRED, CERT_E_UNTRUSTEDROOT, CRYPT_E_SECURITY_SETTINGS,
             TRUST_E_BAD_DIGEST, TRUST_E_EXPLICIT_DISTRUST, TRUST_E_NOSIGNATURE,
         },
     },
     um::{
-        heapapi::HeapAlloc,
-        memoryapi::{VirtualAlloc, VirtualProtect},
-        minwinbase::LMEM_ZEROINIT,
-        processthreadsapi::CreateThread,
-        softpub::WINTRUST_ACTION_GENERIC_VERIFY_V2,
-        winbase::LocalAlloc,
-        wincrypt::{
+        errhandlingapi::GetLastError, heapapi::{GetProcessHeap, HeapAlloc}, memoryapi::{VirtualAlloc, VirtualProtect}, minwinbase::LMEM_ZEROINIT, processthreadsapi::CreateThread, softpub::WINTRUST_ACTION_GENERIC_VERIFY_V2, winbase::LocalAlloc, wincrypt::{
             CertCloseStore, CertFindCertificateInStore, CryptMsgClose, CryptMsgGetParam,
             CryptQueryObject, CERT_FIND_SUBJECT_CERT, CERT_INFO,
             CERT_QUERY_CONTENT_FLAG_PKCS7_SIGNED_EMBED, CERT_QUERY_FORMAT_FLAG_BINARY,
             CERT_QUERY_OBJECT_FILE, CMSG_SIGNER_INFO_PARAM, HCERTSTORE, HCRYPTMSG,
             PCMSG_SIGNER_INFO, PKCS_7_ASN_ENCODING, X509_ASN_ENCODING,
-        },
-        winnt::{
-            HANDLE, HEAP_ZERO_MEMORY, IMAGE_DOS_HEADER, IMAGE_NT_HEADERS32, IMAGE_SECTION_HEADER,
+        }, winnt::{
+            HEAP_ZERO_MEMORY, IMAGE_DOS_HEADER, IMAGE_NT_HEADERS32, IMAGE_SECTION_HEADER,
             MEM_COMMIT, MEM_RESERVE, PAGE_EXECUTE_READ, PAGE_READWRITE,
-        },
-        wintrust::{
+        }, wintrust::{
             WinVerifyTrust, WINTRUST_DATA, WINTRUST_FILE_INFO, WTD_CHOICE_FILE, WTD_REVOKE_NONE,
             WTD_STATEACTION_CLOSE, WTD_STATEACTION_VERIFY, WTD_UI_NONE,
-        },
+        }
     },
 };
 
@@ -51,27 +42,6 @@ use crate::{
     consts::{GIT_SHA, PUBLIC_KEY, USER_AGENT},
     helpers::winapi_ext::{get_module_file_name, LibraryHandle, ReadStringFnError},
 };
-
-// I don't know what the hell is going on with linking, but you have to link these manually,
-// otherwise you end up with the addresses to the intermediary functions, which obviously
-// doesn't exist once you unloads the original library.
-#[link(name = "kernel32")]
-extern "system" {
-    pub fn GetLastError() -> u32;
-    pub fn GetModuleFileNameA(hModule: HMODULE, lpFilename: LPSTR, nsize: DWORD) -> u32;
-    pub fn GetProcessHeap() -> HANDLE;
-    pub fn HeapFree(hHeap: HANDLE, dwFlags: DWORD, lpMem: LPVOID) -> BOOL;
-    pub fn LoadLibraryW(lpFileName: LPCWSTR) -> HMODULE;
-    pub fn ReplaceFileW(
-        lpReplacedFileName: LPCWSTR,
-        lpReplacementFileName: LPCWSTR,
-        lpBackupFileName: LPCWSTR,
-        dwReplaceFlags: DWORD,
-        lpExclude: LPVOID,
-        lpReserved: LPVOID,
-    ) -> BOOL;
-    pub fn Sleep(dwMilliseconds: DWORD);
-}
 
 #[derive(Debug, Snafu)]
 #[allow(clippy::large_enum_variant)]
@@ -257,13 +227,16 @@ pub fn self_update(module: &LibraryHandle) -> Result<bool, SelfUpdateError> {
     //
     // Thanks to DJTRACKERS and their fervidex hook for the approach.
     unsafe {
-        external::GET_LAST_ERROR_PTR = GetLastError as PROC;
-        external::GET_MODULE_FILE_NAME_A_PTR = GetModuleFileNameA as PROC;
-        external::GET_PROCESS_HEAP_PTR = GetProcessHeap as PROC;
-        external::HEAP_FREE_PTR = HeapFree as PROC;
-        external::LOAD_LIBRARY_W_POINTER = LoadLibraryW as PROC;
-        external::REPLCE_FILE_W_PTR = ReplaceFileW as PROC;
-        external::SLEEP_PTR = Sleep as PROC;
+        let kernel32 = dlopen2::raw::Library::open("kernel32.dll")
+            .expect("kernel32 missing on windows?");
+
+        external::GET_LAST_ERROR_PTR = kernel32.symbol("GetLastError").unwrap();
+        external::GET_MODULE_FILE_NAME_A_PTR = kernel32.symbol("GetModuleFileNameA").unwrap();
+        external::GET_PROCESS_HEAP_PTR = kernel32.symbol("GetProcessHeap").unwrap();
+        external::HEAP_FREE_PTR = kernel32.symbol("HeapFree").unwrap();
+        external::LOAD_LIBRARY_W_PTR = kernel32.symbol("LoadLibraryW").unwrap();
+        external::REPLCE_FILE_W_PTR = kernel32.symbol("ReplaceFileW").unwrap();
+        external::SLEEP_PTR = kernel32.symbol("Sleep").unwrap();
 
         debug!("Locating updater code...");
         let dos_header = module.handle() as *const IMAGE_DOS_HEADER;
@@ -330,6 +303,7 @@ pub fn self_update(module: &LibraryHandle) -> Result<bool, SelfUpdateError> {
             &mut old_protect,
         );
 
+        // 0x00007FFB13A63A14
         if result == 0 {
             return Err(SelfUpdateError::FailedVirtualProtect {
                 errno: GetLastError(),

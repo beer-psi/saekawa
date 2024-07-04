@@ -1,6 +1,6 @@
 [package]
 name = "saekawa"
-version = "0.4.3"
+version = "0.4.4"
 edition = "2021"
 license = "0BSD"
 
@@ -20,6 +20,7 @@ cbc = "0.1.2"
 chrono = "0.4.38"
 confy = "0.6.1"
 crochet = "0.2.3"
+dlopen2 = "0.6.0"
 env_logger = { version = "0.11.3", default-features = false }
 faster-hex = "0.9.0"
 flate2 = "1.0.30"
