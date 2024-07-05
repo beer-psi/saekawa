@@ -1,3 +1,4 @@
+#![cfg(windows)]
 mod config;
 mod consts;
 mod helpers;

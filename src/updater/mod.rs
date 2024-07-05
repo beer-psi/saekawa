@@ -235,7 +235,7 @@ pub fn self_update(module: &LibraryHandle) -> Result<bool, SelfUpdateError> {
         external::GET_PROCESS_HEAP_PTR = kernel32.symbol("GetProcessHeap").unwrap();
         external::HEAP_FREE_PTR = kernel32.symbol("HeapFree").unwrap();
         external::LOAD_LIBRARY_W_PTR = kernel32.symbol("LoadLibraryW").unwrap();
-        external::REPLCE_FILE_W_PTR = kernel32.symbol("ReplaceFileW").unwrap();
+        external::REPLACE_FILE_W_PTR = kernel32.symbol("ReplaceFileW").unwrap();
         external::SLEEP_PTR = kernel32.symbol("Sleep").unwrap();
 
         debug!("Locating updater code...");
@@ -303,7 +303,6 @@ pub fn self_update(module: &LibraryHandle) -> Result<bool, SelfUpdateError> {
             &mut old_protect,
         );
 
-        // 0x00007FFB13A63A14
         if result == 0 {
             return Err(SelfUpdateError::FailedVirtualProtect {
                 errno: GetLastError(),
