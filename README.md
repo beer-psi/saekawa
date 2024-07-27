@@ -10,10 +10,10 @@ CHUNITHM hook to submit your scores to Tachi every credit.
 
 ### Installation
 - [Install Visual C++ Redistributable 2022](https://github.com/abbodi1406/vcredist/releases/latest) if you haven't already.
-- Download the [latest release](https://github.com/beerpiss/saekawa/releases/latest)
+- Download the [latest release](https://github.com/beer-psi/saekawa/releases/latest)
 - Extract the zip (if you downloaded the zip) and put `saekawa.dll` in the game folder, where
 `chusanApp.exe`/`chuniApp.exe` is (usually the `bin` folder)
-- Create and edit the [config file](https://github.com/beerpiss/saekawa/blob/trunk/res/saekawa.toml)
+- Create and edit the [config file](https://github.com/beer-psi/saekawa/blob/trunk/res/saekawa.toml)
 (download a config file pre-filled with your Tachi API key [here](https://kamai.tachi.ac/client-file-flow/CXSaekawa)),
 and place it in the same folder as the DLL.
 - When you start the game, inject the DLL into the game process. For segatools, that would be

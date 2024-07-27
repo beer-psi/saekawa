@@ -146,7 +146,7 @@ pub fn self_update(module: &LibraryHandle) -> Result<bool, SelfUpdateError> {
 
     info!("Checking for updates...");
     let response = agent
-        .get("https://beerpiss.github.io/saekawa/update.json")
+        .get("https://beer-psi.github.io/saekawa/update.json")
         .call()
         .context(FailedRequestingUpdateSnafu)?
         .into_json::<UpdateInformation>()
@@ -169,7 +169,7 @@ pub fn self_update(module: &LibraryHandle) -> Result<bool, SelfUpdateError> {
 
     info!("Downloading update v{}...", response.version);
     let url = format!(
-        "https://github.com/beerpiss/saekawa/releases/download/v{}/saekawa.dll",
+        "https://github.com/beer-psi/saekawa/releases/download/v{}/saekawa.dll",
         response.version
     );
 
