@@ -9,7 +9,6 @@ CHUNITHM hook to submit your scores to Tachi every credit.
 - Submit dan and emblem classes to Tachi.
 
 ### Installation
-- [Install Visual C++ Redistributable 2022](https://github.com/abbodi1406/vcredist/releases/latest) if you haven't already.
 - Download the [latest release](https://github.com/beer-psi/saekawa/releases/latest)
 - Extract the zip (if you downloaded the zip) and put `saekawa.dll` in the game folder, where
 `chusanApp.exe`/`chuniApp.exe` is (usually the `bin` folder)
