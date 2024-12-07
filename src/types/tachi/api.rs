@@ -19,29 +19,15 @@ pub struct TachiFailureResponse {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum TachiApiPermission {
-    #[serde(rename = "customise_profile")]
     CustomiseProfile,
-
-    #[serde(rename = "customise_score")]
     CustomiseScore,
-
-    #[serde(rename = "customise_session")]
     CustomiseSession,
-
-    #[serde(rename = "delete_score")]
     DeleteScore,
-
-    #[serde(rename = "manage_challenges")]
     ManageChallenges,
-
-    #[serde(rename = "manage_rivals")]
     ManageRivals,
-
-    #[serde(rename = "manage_targets")]
     ManageTargets,
-
-    #[serde(rename = "submit_score")]
     SubmitScore,
 }
 
