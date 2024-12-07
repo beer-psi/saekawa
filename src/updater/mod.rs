@@ -21,19 +21,28 @@ use winapi::{
         },
     },
     um::{
-        errhandlingapi::GetLastError, heapapi::{GetProcessHeap, HeapAlloc}, memoryapi::{VirtualAlloc, VirtualProtect}, minwinbase::LMEM_ZEROINIT, processthreadsapi::CreateThread, softpub::WINTRUST_ACTION_GENERIC_VERIFY_V2, winbase::LocalAlloc, wincrypt::{
+        errhandlingapi::GetLastError,
+        heapapi::{GetProcessHeap, HeapAlloc},
+        memoryapi::{VirtualAlloc, VirtualProtect},
+        minwinbase::LMEM_ZEROINIT,
+        processthreadsapi::CreateThread,
+        softpub::WINTRUST_ACTION_GENERIC_VERIFY_V2,
+        winbase::LocalAlloc,
+        wincrypt::{
             CertCloseStore, CertFindCertificateInStore, CryptMsgClose, CryptMsgGetParam,
             CryptQueryObject, CERT_FIND_SUBJECT_CERT, CERT_INFO,
             CERT_QUERY_CONTENT_FLAG_PKCS7_SIGNED_EMBED, CERT_QUERY_FORMAT_FLAG_BINARY,
             CERT_QUERY_OBJECT_FILE, CMSG_SIGNER_INFO_PARAM, HCERTSTORE, HCRYPTMSG,
             PCMSG_SIGNER_INFO, PKCS_7_ASN_ENCODING, X509_ASN_ENCODING,
-        }, winnt::{
+        },
+        winnt::{
             HEAP_ZERO_MEMORY, IMAGE_DOS_HEADER, IMAGE_NT_HEADERS32, IMAGE_SECTION_HEADER,
             MEM_COMMIT, MEM_RESERVE, PAGE_EXECUTE_READ, PAGE_READWRITE,
-        }, wintrust::{
+        },
+        wintrust::{
             WinVerifyTrust, WINTRUST_DATA, WINTRUST_FILE_INFO, WTD_CHOICE_FILE, WTD_REVOKE_NONE,
             WTD_STATEACTION_CLOSE, WTD_STATEACTION_VERIFY, WTD_UI_NONE,
-        }
+        },
     },
 };
 
@@ -227,8 +236,8 @@ pub fn self_update(module: &LibraryHandle) -> Result<bool, SelfUpdateError> {
     //
     // Thanks to DJTRACKERS and their fervidex hook for the approach.
     unsafe {
-        let kernel32 = dlopen2::raw::Library::open("kernel32.dll")
-            .expect("kernel32 missing on windows?");
+        let kernel32 =
+            dlopen2::raw::Library::open("kernel32.dll").expect("kernel32 missing on windows?");
 
         external::GET_LAST_ERROR_PTR = kernel32.symbol("GetLastError").unwrap();
         external::GET_MODULE_FILE_NAME_A_PTR = kernel32.symbol("GetModuleFileNameA").unwrap();
