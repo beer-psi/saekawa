@@ -10,7 +10,8 @@ fail_over_lamp = false
 # to Tachi is unstable, you might want to bump this up.
 timeout = 3000
 
-# Whether the hook should update itself when a new update is found.
+# If downloaded from GitHub, automatically update the mod when a new version
+# is found. If downloaded through mod managers, this option does nothing.
 auto_update = true
 
 # The directory/folder to store failed imports due to network

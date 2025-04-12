@@ -1,8 +1,11 @@
 [package]
 name = "saekawa"
-version = "0.4.5"
+version = "0.4.6"
 edition = "2021"
 license = "0BSD"
+
+[features]
+autoupdate = []
 
 [lib]
 crate-type = ["cdylib"]

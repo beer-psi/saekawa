@@ -1,3 +1,5 @@
+#![cfg(feature = "autoupdate")]
+
 mod external;
 
 use std::{

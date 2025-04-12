@@ -30,8 +30,10 @@ use crate::{
     score_import::execute_score_import,
     sigscan::{self, CryptoKeys},
     types::{chuni::UpsertUserAllRequest, ToBatchManual},
-    updater::self_update,
 };
+
+#[cfg(feature = "autoupdate")]
+use crate::updater::self_update;
 
 #[derive(Debug, Snafu)]
 pub enum HookError {
@@ -97,20 +99,24 @@ static UPSERT_USER_ALL_API: OnceLock<String> = OnceLock::new();
 
 static CONFIG: OnceLock<SaekawaConfig> = OnceLock::new();
 
+#[cfg_attr(not(feature = "autoupdate"), allow(unused_variables))]
 pub fn hook_init(library_handle: LibraryHandle) -> Result<(), HookError> {
     debug!("Reading hook configuration");
     let config = SaekawaConfig::load().context(ConfigSnafu)?;
 
-    if config.general.auto_update {
-        match self_update(&library_handle) {
-            Ok(should_reboot) => {
-                if should_reboot {
-                    info!("Self-update successful. Reloading into new hook...");
-                    library_handle.free_and_exit_thread(1);
+    #[cfg(feature = "autoupdate")]
+    {
+        if config.general.auto_update {
+            match self_update(&library_handle) {
+                Ok(should_reboot) => {
+                    if should_reboot {
+                        info!("Self-update successful. Reloading into new hook...");
+                        library_handle.free_and_exit_thread(1);
+                    }
                 }
-            }
-            Err(e) => {
-                error!("Self-update failed: {e:#}");
+                Err(e) => {
+                    error!("Self-update failed: {e:#}");
+                }
             }
         }
     }

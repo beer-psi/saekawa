@@ -54,6 +54,7 @@ impl ThreadHandle {
     }
 }
 
+#[cfg_attr(not(feature = "autoupdate"), allow(dead_code))]
 pub struct LibraryHandle(HINSTANCE);
 
 unsafe impl Send for LibraryHandle {}
@@ -63,10 +64,12 @@ impl LibraryHandle {
         Self(handle)
     }
 
+    #[cfg_attr(not(feature = "autoupdate"), allow(dead_code))]
     pub fn handle(&self) -> HINSTANCE {
         self.0
     }
 
+    #[cfg_attr(not(feature = "autoupdate"), allow(dead_code))]
     pub fn free_and_exit_thread(self, code: u32) -> ! {
         unsafe {
             FreeLibraryAndExitThread(self.0, code);
@@ -124,6 +127,7 @@ pub fn winhttp_query_option(handle: HINTERNET, option: u32) -> Result<String, Re
     )
 }
 
+#[cfg_attr(not(feature = "autoupdate"), allow(dead_code))]
 pub fn get_module_file_name(handle: HMODULE) -> Result<String, ReadStringFnError> {
     read_string_from_function_call(
         |buf, buflen| unsafe {

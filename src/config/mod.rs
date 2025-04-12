@@ -43,21 +43,26 @@ pub enum MigrationError {
 
 impl SaekawaConfig {
     pub fn load() -> Result<SaekawaConfig, ConfigLoadError> {
-        if !Path::new("saekawa.toml").exists() {
+        let config_file_path =
+            std::env::var("SAEKAWA_CONFIG_PATH").unwrap_or_else(|_| "saekawa.toml".to_string());
+
+        info!("Config file: {config_file_path}");
+
+        if !Path::new(&config_file_path).exists() {
             // We don't really care about the error here, since Confy will autogenerate a
             // default configuration file anyways. That one just doesn't have comments.
-            let _ = File::create_new("saekawa.toml")
+            let _ = File::create_new(&config_file_path)
                 .and_then(|mut file| file.write_all(include_bytes!("../../res/saekawa.toml")));
         }
 
-        let result = confy::load_path::<SaekawaConfig>("saekawa.toml");
+        let result = confy::load_path::<SaekawaConfig>(&config_file_path);
 
         match result {
             Ok(_) => result.context(ConfySnafu),
             Err(_) => {
                 warn!("Could not parse configuration, attempting to parse as old configuration...");
                 let old_config =
-                    confy::load_path::<OldSaekawaConfig>("saekawa.toml").context(ConfySnafu)?;
+                    confy::load_path::<OldSaekawaConfig>(&config_file_path).context(ConfySnafu)?;
 
                 info!("Successfully loaded as old configuration, migrating to new format...");
                 let tachi_base_url = Url::parse(&old_config.tachi.base_url)
@@ -91,11 +96,11 @@ impl SaekawaConfig {
 
                 {
                     // confy doesn't actually truncate the file??
-                    if let Ok(f) = File::create("saekawa.toml") {
+                    if let Ok(f) = File::create(&config_file_path) {
                         f.set_len(0).ok();
                     }
                 }
-                confy::store_path("saekawa.toml", new_config.clone()).context(ConfySnafu)?;
+                confy::store_path(&config_file_path, new_config.clone()).context(ConfySnafu)?;
 
                 Ok(new_config)
             }
