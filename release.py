@@ -117,7 +117,7 @@ RAINYCOLOR_WATERCOLOR_FOLDER.mkdir(parents=True, exist_ok=True)
 rainycolor_watercolor_manifest = {
     "name": "saekawa",
     "version_number": cargo_toml["package"]["version"],
-    "website_url": "https://beerpsi.cc",
+    "website_url": "https://github.com/beer-psi/saekawa",
     "description": "Score uploader for Kamaitachi",
     "dependencies": [],
     "installers": [{"identifier": "game-dll"}],
