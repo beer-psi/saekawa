@@ -112,7 +112,6 @@ r.check_returncode()
 
 shutil.rmtree(RAINYCOLOR_WATERCOLOR_FOLDER, ignore_errors=True)
 RAINYCOLOR_WATERCOLOR_FOLDER.mkdir(parents=True, exist_ok=True)
-(RAINYCOLOR_WATERCOLOR_FOLDER / "app" / "bin").mkdir(parents=True, exist_ok=True)
 
 rainycolor_watercolor_manifest = {
     "name": "saekawa",
@@ -120,7 +119,7 @@ rainycolor_watercolor_manifest = {
     "website_url": "https://github.com/beer-psi/saekawa",
     "description": "Score uploader for Kamaitachi",
     "dependencies": [],
-    "installers": [{"identifier": "game-dll"}],
+    "installers": [{"identifier": "native_mod", "dll_game": "saekawa.dll"}],
 }
 with (RAINYCOLOR_WATERCOLOR_FOLDER / "manifest.json").open("w", encoding="utf-8") as f:
     json.dump(rainycolor_watercolor_manifest, f, ensure_ascii=False, indent=4)
@@ -153,6 +152,4 @@ with (RAINYCOLOR_WATERCOLOR_FOLDER / "README.md").open("w", encoding="utf-8") as
     _ = f.write(rainycolor_watercolor_readme)
 
 _ = shutil.copy2("res/icon.png", RAINYCOLOR_WATERCOLOR_FOLDER / "icon.png")
-_ = shutil.copy2(
-    COMPILED_OUTPUT, RAINYCOLOR_WATERCOLOR_FOLDER / "app" / "bin" / "saekawa.dll"
-)
+_ = shutil.copy2(COMPILED_OUTPUT, RAINYCOLOR_WATERCOLOR_FOLDER / "saekawa.dll")
