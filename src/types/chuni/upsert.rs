@@ -95,6 +95,9 @@ pub struct UserPlaylog {
 
     #[serde(deserialize_with = "deserialize_bool")]
     pub is_clear: bool,
+
+    #[serde(deserialize_with = "deserialize_number_from_string")]
+    pub skill_id: u32,
 }
 
 fn default_judge_heaven() -> u32 {

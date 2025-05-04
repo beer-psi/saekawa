@@ -4,15 +4,27 @@ pub mod tachi;
 use chrono::{FixedOffset, TimeZone};
 use num_enum::TryFromPrimitiveError;
 use snafu::{ResultExt, Snafu};
+use tachi::batch_manual::score::NoteLamp;
 
 use self::{
     chuni::{upsert::UserPlaylog, UpsertUserAllRequest},
     tachi::batch_manual::{
         class::ClassEmblem,
-        score::{Difficulty, Judgements, Lamp, MatchType, OptionalMetrics},
+        score::{ClearLamp, Difficulty, Judgements, MatchType, OptionalMetrics},
         BatchManualClasses, BatchManualImport, BatchManualScore,
     },
 };
+
+// they forgot about cts skill for sun for some reason, funny
+const CATASTROPHY_SKILL_IDS: [u32; 3] = [100009, 102009, 103007];
+const ABSOLUTE_SKILL_IDS: [u32; 4] = [100008, 101008, 102008, 103006];
+const BRAVE_SKILL_IDS: [u32; 4] = [100007, 101007, 102007, 103005];
+const HARD_SKILL_IDS: [u32; 11] = [
+    100005, 100006,
+    101004, 101005, 101006,
+    102004, 102005, 102006,
+    103002, 103003, 103004,
+];
 
 #[derive(Debug, Snafu)]
 pub enum ScoreConversionError {
@@ -26,22 +38,32 @@ impl UserPlaylog {
     pub fn to_batch_manual(
         &self,
         major_version: u16,
-        fail_over_lamp: bool,
+        _fail_over_lamp: bool,
     ) -> Result<BatchManualScore, ScoreConversionError> {
-        let lamp = if !self.is_clear && fail_over_lamp {
-            Lamp::Failed
+        let note_lamp = if self.is_all_justice
+            && self.judge_justice + self.judge_attack + self.judge_guilty == 0
+        {
+            NoteLamp::AllJusticeCritical
         } else if self.is_all_justice {
-            if self.judge_justice + self.judge_attack + self.judge_guilty == 0 {
-                Lamp::AllJusticeCritical
-            } else {
-                Lamp::AllJustice
-            }
+            NoteLamp::AllJustice
         } else if self.is_full_combo {
-            Lamp::FullCombo
-        } else if self.is_clear {
-            Lamp::Clear
+            NoteLamp::FullCombo
         } else {
-            Lamp::Failed
+            NoteLamp::None
+        };
+
+        let clear_lamp = if !self.is_clear {
+            ClearLamp::Failed
+        } else if CATASTROPHY_SKILL_IDS.contains(&self.skill_id) {
+            ClearLamp::Catastrophy
+        } else if ABSOLUTE_SKILL_IDS.contains(&self.skill_id) {
+            ClearLamp::Absolute
+        } else if BRAVE_SKILL_IDS.contains(&self.skill_id) {
+            ClearLamp::Brave
+        } else if HARD_SKILL_IDS.contains(&self.skill_id) {
+            ClearLamp::Hard
+        } else {
+            ClearLamp::Clear
         };
 
         let judgements = Judgements {
@@ -64,7 +86,8 @@ impl UserPlaylog {
 
         Ok(BatchManualScore {
             score: self.score,
-            lamp,
+            note_lamp,
+            clear_lamp,
             match_type: MatchType::InGameId,
             identifier: self.music_id.clone(),
             difficulty,

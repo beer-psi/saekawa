@@ -8,7 +8,8 @@ pub struct BatchManualScore {
     pub identifier: String,
     pub difficulty: Difficulty,
     pub score: u32,
-    pub lamp: Lamp,
+    pub note_lamp: NoteLamp,
+    pub clear_lamp: ClearLamp,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub judgements: Option<Judgements>,
@@ -22,21 +23,40 @@ pub struct BatchManualScore {
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, TryFromPrimitive)]
 #[repr(u32)]
-pub enum Lamp {
+pub enum ClearLamp {
     #[serde(rename = "FAILED")]
     Failed = 0,
 
     #[serde(rename = "CLEAR")]
     Clear = 1,
 
+    #[serde(rename = "HARD")]
+    Hard = 2,
+
+    #[serde(rename = "BRAVE")]
+    Brave = 3,
+
+    #[serde(rename = "ABSOLUTE")]
+    Absolute = 4,
+
+    #[serde(rename = "CATASTROPHY")]
+    Catastrophy = 5,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, TryFromPrimitive)]
+#[repr(u32)]
+pub enum NoteLamp {
+    #[serde(rename = "NONE")]
+    None = 0,
+
     #[serde(rename = "FULL COMBO")]
-    FullCombo = 2,
+    FullCombo = 1,
 
     #[serde(rename = "ALL JUSTICE")]
-    AllJustice = 3,
+    AllJustice = 2,
 
     #[serde(rename = "ALL JUSTICE CRITICAL")]
-    AllJusticeCritical = 4,
+    AllJusticeCritical = 3,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, TryFromPrimitive)]
