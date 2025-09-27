@@ -16,10 +16,10 @@ CHUNITHM hook to submit your scores to Tachi every credit.
 (download a config file pre-filled with your Tachi API key [here](https://kamai.tachi.ac/client-file-flow/CXSaekawa)),
 and place it in the same folder as the DLL.
 - When you start the game, inject the DLL into the game process. For segatools, that would be
-adding `-k saekawa.dll` to the arguments of `inject_x86.exe` so it looks like the second line:
+adding `-k saekawa.dll` to the line containing `chusanApp.exe` like this:
 ```batchfile
-REM inject_x86.exe -d -k chusanhook.dll chusanApp.exe
 inject_x86.exe -d -k chusanhook.dll -k saekawa.dll chusanApp.exe
+REM                                 ^^^^^^^^^^^^^^
 ```
 
 **DO NOT INJECT THIS DLL INTO `amdaemon.exe`! THE HOOK DOES NOT USE ANYTHING FROM amdaemon, AND YOU MIGHT GET A CRASH!**
