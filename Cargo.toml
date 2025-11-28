@@ -65,7 +65,7 @@ features = [
 
 [patch.crates-io]
 libudis86-sys = { git = "https://github.com/vars1ty/libudis86-sys.git" }
-detour2 = { path = "./vendor/detour-rs" }
+detour2 = { path = "./vendor/detour" }
 
 [build-dependencies]
 snafu = "0.8.3"
