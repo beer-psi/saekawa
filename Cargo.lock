@@ -170,9 +170,9 @@ dependencies = [
 
 [[package]]
 name = "convert_case"
-version = "0.6.0"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ec182b0ca2f35d8fc196cf3404988fd8b8c739a4d270ff118a398feb0cbec1ca"
+checksum = "db05ffb6856bf0ecdf6367558a76a0e8a77b1713044eb92845c692100ed50190"
 dependencies = [
  "unicode-segmentation",
 ]
@@ -213,24 +213,23 @@ dependencies = [
 
 [[package]]
 name = "crochet"
-version = "0.2.3"
+version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f04b57b6622415ac518f765b5bdd0ea02d054be8812209e084968262ede2eaf1"
+checksum = "3fd7479c4c149b4c164087bbf3fdd9123c7b9cfe472035c0b7c7cd0274ba2144"
 dependencies = [
  "crochet_macro",
  "detour2",
- "dlopen2",
- "lazy_static",
+ "dlopen2 0.8.0",
 ]
 
 [[package]]
 name = "crochet_macro"
-version = "0.2.3"
+version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e74a83ef9230596d172d8c6577dc43f1dda70d17d5dcf1cdad86f8908b7a4a0"
+checksum = "2279fbb0a0c6304d9279492032de8eabe9d2cfc8b6039e1d13dcfbf2613a92b2"
 dependencies = [
  "convert_case",
- "dlopen2",
+ "dlopen2 0.8.0",
  "proc-macro2",
  "quote",
  "syn 1.0.109",
@@ -264,8 +263,6 @@ dependencies = [
 [[package]]
 name = "detour2"
 version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d23c46a579bfa55f6f09fa8b482f994eefae5ed333823ddfcfddc69a7baf405b"
 dependencies = [
  "cfg-if",
  "generic-array",
@@ -275,7 +272,6 @@ dependencies = [
  "mmap-fixed-fixed",
  "region",
  "slice-pool",
- "winapi",
 ]
 
 [[package]]
@@ -326,6 +322,18 @@ name = "dlopen2"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6bc2c7ed06fd72a8513ded8d0d2f6fd2655a85d6885c48cae8625d80faf28c03"
+dependencies = [
+ "dlopen2_derive",
+ "libc",
+ "once_cell",
+ "winapi",
+]
+
+[[package]]
+name = "dlopen2"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b54f373ccf864bf587a89e880fb7610f8d73f3045f13580948ccbcaff26febff"
 dependencies = [
  "dlopen2_derive",
  "libc",
@@ -707,8 +715,7 @@ dependencies = [
 [[package]]
 name = "libudis86-sys"
 version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "139bbf9ddb1bfc90c1ac64dd2923d9c957cd433cee7315c018125d72ab08a6b0"
+source = "git+https://github.com/vars1ty/libudis86-sys.git#fd3b2e5ce232a91d1bee43bd4a3aee9957d06a84"
 dependencies = [
  "cc",
  "libc",
@@ -1100,14 +1107,14 @@ checksum = "f3cb5ba0dc43242ce17de99c180e96db90b235b8a9fdc9543c96d2209116bd9f"
 
 [[package]]
 name = "saekawa"
-version = "0.4.7"
+version = "0.4.8"
 dependencies = [
  "aes",
  "cbc",
  "chrono",
  "confy",
  "crochet",
- "dlopen2",
+ "dlopen2 0.6.1",
  "env_logger",
  "faster-hex",
  "flate2",

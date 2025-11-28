@@ -35,24 +35,24 @@ pub unsafe fn is_network_encrypted(
 
     debug!("Using {scan_mode:?} for signature scanning");
 
-    debug!("Scanning for the endpoint salt password");
-    // b"?AVDeflate@projClient@@\x??\x??\x??\x??\x??\x??\x??\x??"
-    // This is what the patchers are patching out when disabling encryption. This is
-    // also where the endpoint salt password can be found.
-    let scanner = Scanner::new("3F 41 56 44 65 66 6C 61 74 65 40 70 72 6F 6A 43 6C 69 65 6E 74 40 40 ?? ?? ?? ?? ?? ?? ?? ??");
+    debug!("Scanning for Chuni-Encoding version");
+    let scanner = Scanner::new("A1 ?? ?? ?? ?? 68 F4 00 00 00 89 46 04");
     let result = scanner.find(Some(scan_mode), module_base, module_size);
 
     if !result.is_valid() {
-        error!("Could not find the endpoint salt password");
+        error!("Could not find Chuni-Encoding version");
         return Err(CryptoScanError::MissingSignature);
     }
 
-    let crypto_config = *result.get_addr().wrapping_add(0x1B);
+    let chuni_encoding_address =
+        i32_from_ptr_le_bytes(result.get_addr().wrapping_add(0x01)) as *const i32;
+    let chuni_encoding = *chuni_encoding_address;
 
-    if crypto_config == 0 {
+    if chuni_encoding <= 0 {
         return Ok(false);
     }
 
+    debug!("Chuni-Encoding: {chuni_encoding}");
     Ok(true)
 }
 

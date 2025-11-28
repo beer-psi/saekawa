@@ -136,3 +136,6 @@ fabric.properties
 *.pfx
 *.json
 dist/
+
+.env
+.xwin-cache

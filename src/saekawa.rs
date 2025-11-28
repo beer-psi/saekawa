@@ -177,7 +177,7 @@ pub fn hook_release() -> Result<(), HookError> {
 }
 
 #[allow(clippy::missing_transmute_annotations)]
-#[crochet::hook(compile_check, "winhttp.dll", "WinHttpWriteData")]
+#[crochet::hook("winhttp.dll", "WinHttpWriteData")]
 fn winhttpwritedata_hook(
     hrequest: HINTERNET,
     lp_buffer: LPCVOID,
