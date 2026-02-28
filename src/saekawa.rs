@@ -7,11 +7,14 @@ use std::{
 
 use flate2::read::ZlibDecoder;
 use ini::Ini;
-use log::{debug, error, info};
+use log::{debug, error, info, warn};
 use serde::Deserialize;
 use snafu::{prelude::Snafu, ResultExt};
 use winapi::{
-    shared::minwindef::{BOOL, DWORD, LPCVOID, LPDWORD},
+    shared::{
+        minwindef::{BOOL, DWORD, LPCVOID, LPDWORD},
+        winerror::ERROR_INVALID_PARAMETER,
+    },
     um::winhttp::{HINTERNET, WINHTTP_OPTION_URL},
 };
 
@@ -198,7 +201,19 @@ fn process_request(
     buffer: LPCVOID,
     bufsiz: DWORD,
 ) -> Result<(), ProcessRequestError> {
-    let url = winhttp_query_option(hrequest, WINHTTP_OPTION_URL).context(UrlReadSnafu)?;
+    let url = match winhttp_query_option(hrequest, WINHTTP_OPTION_URL) {
+        Ok(url) => url,
+        Err(ReadStringFnError::Other { errno }) if errno == ERROR_INVALID_PARAMETER => {
+            warn!("Unexpected ERROR_INVALID_PARAMETER when calling WinHttpQueryOption(WINHTTP_OPTION_URL). If you are running under Wine/Proton, update to at least Wine 9.13/Proton 10.0.");
+
+            return Err(ProcessRequestError::UrlRead {
+                source: ReadStringFnError::Other { errno },
+            });
+        }
+        Err(e) => {
+            return Err(ProcessRequestError::UrlRead { source: e });
+        }
+    };
 
     debug!("Captured request to {url}");
 
