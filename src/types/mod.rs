@@ -20,10 +20,7 @@ const CATASTROPHY_SKILL_IDS: [u32; 3] = [100009, 102009, 103007];
 const ABSOLUTE_SKILL_IDS: [u32; 4] = [100008, 101008, 102008, 103006];
 const BRAVE_SKILL_IDS: [u32; 4] = [100007, 101007, 102007, 103005];
 const HARD_SKILL_IDS: [u32; 11] = [
-    100005, 100006,
-    101004, 101005, 101006,
-    102004, 102005, 102006,
-    103002, 103003, 103004,
+    100005, 100006, 101004, 101005, 101006, 102004, 102005, 102006, 103002, 103003, 103004,
 ];
 
 #[derive(Debug, Snafu)]
@@ -38,7 +35,6 @@ impl UserPlaylog {
     pub fn to_batch_manual(
         &self,
         major_version: u16,
-        _fail_over_lamp: bool,
     ) -> Result<BatchManualScore, ScoreConversionError> {
         let note_lamp = if self.is_all_justice
             && self.judge_justice + self.judge_attack + self.judge_guilty == 0
@@ -101,21 +97,11 @@ impl UserPlaylog {
 }
 
 pub trait ToBatchManual {
-    fn to_batch_manual(
-        &self,
-        major_version: u16,
-        export_class: bool,
-        fail_over_lamp: bool,
-    ) -> BatchManualImport;
+    fn to_batch_manual(&self, major_version: u16, export_class: bool) -> BatchManualImport;
 }
 
 impl ToBatchManual for UpsertUserAllRequest {
-    fn to_batch_manual(
-        &self,
-        major_version: u16,
-        export_class: bool,
-        fail_over_lamp: bool,
-    ) -> BatchManualImport {
+    fn to_batch_manual(&self, major_version: u16, export_class: bool) -> BatchManualImport {
         let user_data = &self.upsert_user_all.user_data[0];
 
         let classes = if export_class {
@@ -140,7 +126,7 @@ impl ToBatchManual for UpsertUserAllRequest {
             .user_playlog_list
             .iter()
             .filter_map(|p| {
-                let conv = p.to_batch_manual(major_version, fail_over_lamp);
+                let conv = p.to_batch_manual(major_version);
 
                 if conv
                     .as_ref()

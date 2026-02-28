@@ -2,10 +2,6 @@
 # Whether the hook should export class medals (dans) and emblems.
 export_class = true
 
-# Whether FAILED lamps should override FULL COMBO and ALL JUSTICE.
-# Not recommended, but it's an option.
-fail_over_lamp = false
-
 # Timeout for web requests, in milliseconds. If your network connection
 # to Tachi is unstable, you might want to bump this up.
 timeout = 3000

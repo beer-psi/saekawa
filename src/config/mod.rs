@@ -88,7 +88,6 @@ impl SaekawaConfig {
 
                 let new_general_config = GeneralConfig {
                     export_class: old_config.general.export_class,
-                    fail_over_lamp: old_config.general.fail_over_lamp,
                     timeout: old_config.general.timeout,
                     ..Default::default()
                 };
@@ -119,9 +118,6 @@ pub struct GeneralConfig {
     #[serde(default = "default_true")]
     pub export_class: bool,
 
-    #[serde(default = "default_false")]
-    pub fail_over_lamp: bool,
-
     #[serde(default = "default_timeout")]
     pub timeout: u64,
 
@@ -136,7 +132,6 @@ impl Default for GeneralConfig {
     fn default() -> Self {
         Self {
             export_class: true,
-            fail_over_lamp: false,
             timeout: 5000,
             auto_update: true,
             failed_import_dir: PathBuf::from_str("failed_saekawa_imports").ok(),

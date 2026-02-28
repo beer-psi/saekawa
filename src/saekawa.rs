@@ -342,11 +342,7 @@ fn process_request(
             return;
         };
 
-        let import = data.to_batch_manual(
-            *major_version,
-            config.general.export_class,
-            config.general.fail_over_lamp,
-        );
+        let import = data.to_batch_manual(*major_version, config.general.export_class);
 
         if let Err(e) = execute_score_import(import, access_code, tachi_api_key, config) {
             error!("{e}");
