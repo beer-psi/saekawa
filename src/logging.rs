@@ -53,7 +53,7 @@ pub fn init_logger() {
             let target = record.target();
             let level = record.level();
             let args = record.args();
-            let time = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
+            let time = jiff::Zoned::now().strftime("%Y-%m-%d %H:%M:%S");
 
             writeln!(f, "{time} {level:<5} [{target}] {args}")
         })

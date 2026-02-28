@@ -30,8 +30,9 @@ where
     }
 }
 
-mod serde_user_play_date {
-    use chrono::NaiveDateTime;
+/// Module for parsing CHUNITHM datetimes (2006-01-02 03:04:05) into [`jiff::Zoned`]
+/// values at Asia/Tokyo.
+mod serde_chuni_date {
     use serde::{de, ser};
 
     const DT_FORMAT: &str = "%Y-%m-%d %H:%M:%S";
@@ -39,14 +40,14 @@ mod serde_user_play_date {
     #[derive(Debug)]
     struct UserPlayDateVisitor;
 
-    pub fn serialize<S>(dt: &NaiveDateTime, serializer: S) -> Result<S::Ok, S::Error>
+    pub fn serialize<S>(dt: &jiff::Zoned, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: ser::Serializer,
     {
-        serializer.serialize_str(&dt.format(DT_FORMAT).to_string())
+        serializer.serialize_str(&dt.strftime(DT_FORMAT).to_string())
     }
 
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<NaiveDateTime, D::Error>
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<jiff::Zoned, D::Error>
     where
         D: de::Deserializer<'de>,
     {
@@ -54,7 +55,7 @@ mod serde_user_play_date {
     }
 
     impl<'de> de::Visitor<'de> for UserPlayDateVisitor {
-        type Value = NaiveDateTime;
+        type Value = jiff::Zoned;
 
         fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
             write!(formatter, "a string in the format of \"{}\"", DT_FORMAT)
@@ -64,7 +65,10 @@ mod serde_user_play_date {
         where
             E: de::Error,
         {
-            NaiveDateTime::parse_from_str(v, DT_FORMAT).map_err(E::custom)
+            jiff::civil::DateTime::strptime(DT_FORMAT, v)
+                .map(|dt| dt.in_tz("Asia/Tokyo").map_err(E::custom))
+                .map_err(E::custom)
+                .flatten()
         }
     }
 }

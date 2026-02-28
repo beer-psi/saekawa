@@ -1,8 +1,7 @@
-use chrono::NaiveDateTime;
 use serde::{Deserialize, Serialize};
 use serde_aux::prelude::*;
 
-use super::{deserialize_bool, serde_user_play_date};
+use super::{deserialize_bool, serde_chuni_date};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -23,6 +22,11 @@ pub struct UpsertUserAllBody {
 #[serde(rename_all = "camelCase")]
 pub struct UserData {
     pub access_code: String,
+
+    /// The date and time the player last played at, in the local time
+    /// perceived by the game. On most setups this will be UTC+9.
+    #[serde(with = "serde_chuni_date")]
+    pub last_play_date: jiff::Zoned,
 
     #[serde(
         default = "default_class_emblem",
@@ -56,8 +60,8 @@ pub struct UserPlaylog {
 
     /// The date and time the player set this score with, in the local time
     /// perceived by the game. On most setups this will be UTC+9.
-    #[serde(with = "serde_user_play_date")]
-    pub user_play_date: NaiveDateTime,
+    #[serde(with = "serde_chuni_date")]
+    pub user_play_date: jiff::Zoned,
 
     #[serde(deserialize_with = "deserialize_number_from_string")]
     pub level: u32,

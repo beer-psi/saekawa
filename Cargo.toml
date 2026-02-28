@@ -1,6 +1,6 @@
 [package]
 name = "saekawa"
-version = "0.4.8"
+version = "0.4.9"
 edition = "2021"
 license = "0BSD"
 
@@ -20,7 +20,6 @@ panic = "abort"
 [dependencies]
 aes = "0.8.4"
 cbc = "0.1.2"
-chrono = "0.4.38"
 confy = "0.6.1"
 crochet = "0.2.4"
 dlopen2 = "0.6.0"
@@ -35,7 +34,7 @@ pbkdf2 = "0.12.2"
 rand = "0.8.5"
 rust-ini = "0.21.0"
 serde = { version = "1.0.203", features = ["derive"] }
-serde-aux = "4.5.0"
+serde-aux = { version = "4.5.0", default-features = false }
 serde_json = "1.0.117"
 sha1 = "0.10.6"
 sha2 = "0.10.8"
@@ -63,6 +62,16 @@ features = [
     "softpub",
     "wintrust",
 ]
+
+[dependencies.jiff]
+version = "0.2.21"
+# disable tzdb-zoneinfo, since zoneinfo parsing is bugged on Windows due to
+# the path separator
+# https://github.com/BurntSushi/jiff/issues/525
+# Windows doesn't have a tz database, but Linux does, so it breaks programs
+# running under Wine.
+default-features = false
+features = ["std", "alloc", "tz-system", "tz-fat", "tzdb-bundle-always"]
 
 [patch.crates-io]
 libudis86-sys = { git = "https://github.com/vars1ty/libudis86-sys.git" }

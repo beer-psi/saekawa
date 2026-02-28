@@ -85,7 +85,7 @@ pub fn execute_score_import(
                 "Saving batch manual JSON to configured failed import directory for later import."
             );
 
-            let current_time = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S");
+            let current_time = jiff::Zoned::now().strftime("%Y-%m-%d_%H-%M-%S");
             let failed_import_filename =
                 d.join(format!("saekawa_{}_{}.json", access_code, current_time));
 
@@ -112,8 +112,12 @@ pub fn execute_score_import(
 
     match response.body {
         ImportResponse::Deferred(d) => {
+            let api_key = api_key.to_owned();
+
             info!("Import was queued for processing. Poll URL: {}", d.url);
-            poll_deferred_import(&client, api_key, &d.url);
+            // Fire polling for deferred import status and forget about it, since the result
+            // won't meaningly affect the import in any way.
+            thread::spawn(move || poll_deferred_import(&client, &api_key, &d.url));
         }
         ImportResponse::Completed(d) => {
             log_tachi_import(&response.description, &d);
@@ -169,7 +173,7 @@ where
         let response = match response {
             Ok(r) => r,
             Err(ureq::Error::Transport(e)) => {
-                error!("Could not reach Tachi API. Is your network up or are they having issues?.");
+                error!("Could not reach Tachi API. Is your network up or are they having issues?");
 
                 if let Some(m) = e.message() {
                     error!("Detailed error message: {}", m);

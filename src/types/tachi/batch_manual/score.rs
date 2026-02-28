@@ -15,7 +15,7 @@ pub struct BatchManualScore {
     pub judgements: Option<Judgements>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub time_achieved: Option<u128>,
+    pub time_achieved: Option<i64>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub optional: Option<OptionalMetrics>,

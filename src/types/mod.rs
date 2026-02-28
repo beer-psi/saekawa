@@ -1,7 +1,7 @@
 pub mod chuni;
 pub mod tachi;
 
-use chrono::{FixedOffset, TimeZone};
+use log::warn;
 use num_enum::TryFromPrimitiveError;
 use snafu::{ResultExt, Snafu};
 use tachi::batch_manual::score::NoteLamp;
@@ -35,6 +35,7 @@ impl UserPlaylog {
     pub fn to_batch_manual(
         &self,
         major_version: u16,
+        replace_tz: Option<jiff::tz::TimeZone>,
     ) -> Result<BatchManualScore, ScoreConversionError> {
         let note_lamp = if self.is_all_justice
             && self.judge_justice + self.judge_attack + self.judge_guilty == 0
@@ -74,11 +75,17 @@ impl UserPlaylog {
         } else {
             Difficulty::try_from(self.level).context(InvalidDifficultySnafu)?
         };
-
-        let jst_offset = FixedOffset::east_opt(9 * 3600).expect("chrono should parse JST timezone");
-        let jst_time = jst_offset
-            .from_local_datetime(&self.user_play_date)
-            .unwrap();
+        let time_achieved = if let Some(replace_tz) = replace_tz {
+            match self.user_play_date.datetime().to_zoned(replace_tz) {
+                Ok(user_play_date) => Some(user_play_date.timestamp().as_millisecond()),
+                Err(e) => {
+                    warn!("Cannot replace the timestamp's time zone: {e:?}");
+                    None
+                }
+            }
+        } else {
+            Some(self.user_play_date.timestamp().as_millisecond())
+        };
 
         Ok(BatchManualScore {
             score: self.score,
@@ -87,7 +94,7 @@ impl UserPlaylog {
             match_type: MatchType::InGameId,
             identifier: self.music_id.clone(),
             difficulty,
-            time_achieved: Some(jst_time.timestamp_millis() as u128),
+            time_achieved,
             judgements: Some(judgements),
             optional: Some(OptionalMetrics {
                 max_combo: self.max_combo,
@@ -97,11 +104,21 @@ impl UserPlaylog {
 }
 
 pub trait ToBatchManual {
-    fn to_batch_manual(&self, major_version: u16, export_class: bool) -> BatchManualImport;
+    fn to_batch_manual(
+        &self,
+        major_version: u16,
+        export_class: bool,
+        replace_tz: Option<jiff::tz::TimeZone>,
+    ) -> BatchManualImport;
 }
 
 impl ToBatchManual for UpsertUserAllRequest {
-    fn to_batch_manual(&self, major_version: u16, export_class: bool) -> BatchManualImport {
+    fn to_batch_manual(
+        &self,
+        major_version: u16,
+        export_class: bool,
+        replace_tz: Option<jiff::tz::TimeZone>,
+    ) -> BatchManualImport {
         let user_data = &self.upsert_user_all.user_data[0];
 
         let classes = if export_class {
@@ -126,7 +143,7 @@ impl ToBatchManual for UpsertUserAllRequest {
             .user_playlog_list
             .iter()
             .filter_map(|p| {
-                let conv = p.to_batch_manual(major_version);
+                let conv = p.to_batch_manual(major_version, replace_tz.clone());
 
                 if conv
                     .as_ref()

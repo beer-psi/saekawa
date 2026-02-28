@@ -1,8 +1,9 @@
 use std::{
     io::{self, Read},
     num::ParseIntError,
-    sync::OnceLock,
+    sync::{Arc, Condvar, LazyLock, Mutex, OnceLock},
     thread,
+    time::Duration,
 };
 
 use flate2::read::ZlibDecoder;
@@ -12,17 +13,24 @@ use serde::Deserialize;
 use snafu::{prelude::Snafu, ResultExt};
 use winapi::{
     shared::{
-        minwindef::{BOOL, DWORD, LPCVOID, LPDWORD},
+        basetsd::DWORD_PTR,
+        minwindef::{BOOL, DWORD, LPCVOID, LPDWORD, LPVOID},
         winerror::ERROR_INVALID_PARAMETER,
     },
-    um::winhttp::{HINTERNET, WINHTTP_OPTION_URL},
+    um::winhttp::{
+        HINTERNET, WINHTTP_CALLBACK_STATUS_HEADERS_AVAILABLE, WINHTTP_OPTION_URL,
+        WINHTTP_STATUS_CALLBACK,
+    },
 };
 
 use crate::{
     config::{ConfigLoadError, SaekawaConfig},
     crypto::{decrypt_aes256_cbc, get_game_crypto_information, GameCryptoInformation},
-    helpers::winapi_ext::{
-        winhttp_query_option, winhttp_query_request_headers, LibraryHandle, ReadStringFnError,
+    helpers::{
+        winapi_ext::{
+            winhttp_query_option, winhttp_query_request_headers, LibraryHandle, ReadStringFnError,
+        },
+        Defer,
     },
     score_import::execute_score_import,
     types::{chuni::UpsertUserAllRequest, ToBatchManual},
@@ -92,10 +100,13 @@ pub struct GameInformation {
 /// because some enum indexes changed between CHUNITHM and CHUNITHM NEW,
 /// namely difficulty, and later on, clear lamps.
 static GAME_MAJOR_VERSION: OnceLock<u16> = OnceLock::new();
-
 static GAME_CRYPTO_INFORMATION: OnceLock<GameCryptoInformation> = OnceLock::new();
-
 static CONFIG: OnceLock<SaekawaConfig> = OnceLock::new();
+
+static IS_EXECUTING_IMPORT: LazyLock<Arc<(Mutex<bool>, Condvar)>> =
+    LazyLock::new(|| Arc::new((Mutex::new(false), Condvar::new())));
+static CURRENT_WINHTTP_STATUS_CALLBACK: LazyLock<Arc<Mutex<WINHTTP_STATUS_CALLBACK>>> =
+    LazyLock::new(|| Arc::new(Mutex::new(None)));
 
 #[cfg_attr(not(feature = "autoupdate"), allow(unused_variables))]
 pub fn hook_init(library_handle: LibraryHandle) -> Result<(), HookError> {
@@ -161,6 +172,7 @@ pub fn hook_init(library_handle: LibraryHandle) -> Result<(), HookError> {
         .expect("OnceLock shouldn't be initialized.");
 
     crochet::enable!(winhttpwritedata_hook).context(CrochetSnafu)?;
+    crochet::enable!(winhttpsetstatuscallback_hook).context(CrochetSnafu)?;
     info!("Hooks enabled.");
 
     Ok(())
@@ -169,6 +181,10 @@ pub fn hook_init(library_handle: LibraryHandle) -> Result<(), HookError> {
 pub fn hook_release() -> Result<(), HookError> {
     if crochet::is_enabled!(winhttpwritedata_hook) {
         crochet::disable!(winhttpwritedata_hook).context(CrochetSnafu)?;
+    }
+
+    if crochet::is_enabled!(winhttpsetstatuscallback_hook) {
+        crochet::disable!(winhttpsetstatuscallback_hook).context(CrochetSnafu)?;
     }
 
     info!("Hooks disabled.");
@@ -194,6 +210,56 @@ fn winhttpwritedata_hook(
         dw_n_bytes_to_write,
         lpdw_n_bytes_written
     )
+}
+
+#[crochet::hook("winhttp.dll", "WinHttpSetStatusCallback")]
+fn winhttpsetstatuscallback_hook(
+    hrequest: HINTERNET,
+    lpfn_internet_callback: WINHTTP_STATUS_CALLBACK,
+    dw_notification_flags: DWORD,
+    dw_reserved: DWORD_PTR,
+) -> WINHTTP_STATUS_CALLBACK {
+    // This only gets called a single time by the network code into a single
+    // function pointer, so we don't have to worry about different stuff
+    // trampling on each other, at least for now.
+    *CURRENT_WINHTTP_STATUS_CALLBACK.lock().unwrap() = lpfn_internet_callback;
+
+    call_original!(
+        hrequest,
+        Some(winhttp_status_callback),
+        dw_notification_flags,
+        dw_reserved
+    )
+}
+
+extern "system" fn winhttp_status_callback(
+    hrequest: HINTERNET,
+    dw_context: DWORD_PTR,
+    dw_internet_status: DWORD,
+    lpv_status_information: LPVOID,
+    dw_status_information_length: DWORD,
+) {
+    // block the callback from being called before import is complete
+    if dw_internet_status == WINHTTP_CALLBACK_STATUS_HEADERS_AVAILABLE {
+        let (lock, cvar) = &*IS_EXECUTING_IMPORT.clone();
+        let mut executing_import = lock.lock().unwrap();
+
+        while *executing_import {
+            executing_import = cvar.wait(executing_import).unwrap();
+        }
+    }
+
+    if let Some(original_callback) = *CURRENT_WINHTTP_STATUS_CALLBACK.lock().unwrap() {
+        unsafe {
+            original_callback(
+                hrequest,
+                dw_context,
+                dw_internet_status,
+                lpv_status_information,
+                dw_status_information_length,
+            );
+        }
+    }
 }
 
 fn process_request(
@@ -264,7 +330,39 @@ fn process_request(
         debug!("raw request: {}", faster_hex::hex_string(&raw_body));
     }
 
+    // Mark the import as executing from here so that callbacks
+    // will block even if the response comes instantly
+    let (lock, _cvar) = &*IS_EXECUTING_IMPORT.clone();
+    *lock.lock().unwrap() = true;
+
+    // Drop the block after 45s, even if the import is still ongoing
+    // at Kamaitachi, since network requests time out at 60s
     thread::spawn(move || {
+        thread::sleep(Duration::from_secs(45));
+
+        let (lock, cvar) = &*IS_EXECUTING_IMPORT.clone();
+        let mut executing_import = lock.lock().unwrap();
+
+        if *executing_import {
+            *executing_import = false;
+            cvar.notify_one();
+        }
+    });
+
+    thread::spawn(move || {
+        // Import execution should stop when this thread exits at any moment.
+        // The "proper" way to do this would probably be to extract the existing
+        // code out into a function but I don't careeeee
+        let _defer = Defer::new(|| {
+            let (lock, cvar) = &*IS_EXECUTING_IMPORT.clone();
+            let mut executing_import = lock.lock().unwrap();
+
+            if *executing_import {
+                *executing_import = false;
+                cvar.notify_one();
+            }
+        });
+
         let Some(config) = CONFIG.get() else {
             error!("Config has not been initialized?");
             return;
@@ -341,8 +439,77 @@ fn process_request(
             info!("No API keys was assigned to {access_code}, and no default API key was set, skipping score import.");
             return;
         };
+        let current_time = jiff::Zoned::now();
+        let time_difference = (&current_time - &user_data.last_play_date)
+            .total(jiff::Unit::Second)
+            .expect("jiff::Zoned::until should not give a span with calendar units")
+            .abs();
 
-        let import = data.to_batch_manual(*major_version, config.general.export_class);
+        // Extremely generous time difference, since lastPlayDate is set right before
+        // the profile is submitted
+        let replace_tz = if time_difference >= 300.0 {
+            warn!("+-------------------------------------------------------------------------------------+");
+            warn!("|                                 CLOCK JUMP DETECTED!                                |");
+            warn!("+-------------------------------------------------------------------------------------+");
+            warn!("Received a profile upsert request where the last play date was more than 5 minutes ago.");
+            warn!(
+                "(current time: {}, last play date: {})",
+                current_time.strftime("%Y-%m-%d %H:%M:%S %Z"),
+                user_data
+                    .last_play_date
+                    .with_time_zone(current_time.time_zone().clone())
+                    .strftime("%Y-%m-%d %H:%M:%S %Z")
+            );
+            warn!("This usually indicates that the segatools timezone hook is disabled or malfunctioning.");
+            warn!("Saekawa expects timestamps from CHUNITHM to be in JST (UTC+9).");
+            warn!("Invalid timestamps can cause scores to be rejected. Please double check your setup.");
+
+            warn!("Trying to see if timestamps are actually in the system's local time...");
+
+            // Try to replace the timezone in last_play_date with the system timezone and see if it
+            // makes more sense, since that's the most common way the timestamp is fucked up
+            match jiff::tz::TimeZone::try_system() {
+                Ok(system_tz) => match user_data
+                    .last_play_date
+                    .datetime()
+                    .to_zoned(system_tz.clone())
+                {
+                    Ok(last_play_date_as_system_time) => {
+                        let time_difference_2 = (&current_time - &last_play_date_as_system_time)
+                            .total(jiff::Unit::Second)
+                            .expect("jiff::Zoned::until should not give a span with calendar units")
+                            .abs();
+
+                        if time_difference_2 < 300.0 {
+                            warn!("Treating the timestamps as local time instead.",);
+                            Some(system_tz)
+                        } else {
+                            warn!("Cannot treat timestamps as local time, since the time difference is still too large.");
+                            warn!(
+                                "(current time: {}, last play date: {})",
+                                current_time.strftime("%Y-%m-%d %H:%M:%S %Z"),
+                                last_play_date_as_system_time
+                                    .with_time_zone(current_time.time_zone().clone())
+                                    .strftime("%Y-%m-%d %H:%M:%S %Z")
+                            );
+                            None
+                        }
+                    }
+                    Err(e) => {
+                        warn!("Cannot replace the timestamp's timezone with the system timezone: {e:?}");
+                        None
+                    }
+                },
+                Err(e) => {
+                    warn!("Cannot retrieve the system time zone: {e:?}");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        let import = data.to_batch_manual(*major_version, config.general.export_class, replace_tz);
 
         if let Err(e) = execute_score_import(import, access_code, tachi_api_key, config) {
             error!("{e}");
