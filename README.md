@@ -24,6 +24,10 @@ REM                                 ^^^^^^^^^^^^^^
 
 **DO NOT INJECT THIS DLL INTO `amdaemon.exe`! THE HOOK DOES NOT USE ANYTHING FROM amdaemon, AND YOU MIGHT GET A CRASH!**
 
+### Wine/Proton notes
+
+The minimum supported Wine version is 9.13. The minimum supported Proton version is 10.0.
+
 ### Credits
 - Adam Thibert ([adamaq01](https://github.com/adamaq01)). A lot of the code was copied from
 [Mikado](https://github.com/adamaq01/Mikado), a similar hook for SDVX.

@@ -332,8 +332,8 @@ pub fn self_update(module: &LibraryHandle) -> Result<bool, SelfUpdateError> {
         (*heap).module = module.handle();
 
         // Prepend "\\?\" to the path to prevent path length limits.
-        (*heap).old[0..4].copy_from_slice(&[0x005C, 0x005C, 0x003F, 0x005C]);
-        (*heap).new[0..4].copy_from_slice(&[0x005C, 0x005C, 0x003F, 0x005C]);
+        (&mut (*heap).old)[0..4].copy_from_slice(&[0x005C, 0x005C, 0x003F, 0x005C]);
+        (&mut (*heap).new)[0..4].copy_from_slice(&[0x005C, 0x005C, 0x003F, 0x005C]);
         for (i, c) in module_filename.encode_utf16().enumerate() {
             (*heap).old[i + 4] = c;
         }

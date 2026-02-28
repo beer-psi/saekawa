@@ -1,11 +1,11 @@
 #![cfg(windows)]
 mod config;
 mod consts;
+mod crypto;
 mod helpers;
 mod logging;
 mod saekawa;
 mod score_import;
-mod sigscan;
 mod types;
 mod updater;
 

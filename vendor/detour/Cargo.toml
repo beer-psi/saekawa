@@ -29,6 +29,7 @@ matches = "0.1.9"
 [features]
 default = ["nightly"]
 nightly = []
+thiscall-abi = ["nightly"]
 
 [[example]]
 name = "messageboxw_detour"

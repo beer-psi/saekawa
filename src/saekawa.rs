@@ -1,34 +1,27 @@
 use std::{
     io::{self, Read},
-    mem::{self, MaybeUninit},
     num::ParseIntError,
-    ptr,
     sync::OnceLock,
     thread,
 };
 
+use flate2::read::ZlibDecoder;
 use ini::Ini;
 use log::{debug, error, info};
+use serde::Deserialize;
 use snafu::{prelude::Snafu, ResultExt};
 use winapi::{
     shared::minwindef::{BOOL, DWORD, LPCVOID, LPDWORD},
-    um::{
-        errhandlingapi::GetLastError,
-        libloaderapi::GetModuleHandleW,
-        processthreadsapi::GetCurrentProcess,
-        psapi::{GetModuleInformation, MODULEINFO},
-        winhttp::{HINTERNET, WINHTTP_OPTION_URL},
-    },
+    um::winhttp::{HINTERNET, WINHTTP_OPTION_URL},
 };
 
 use crate::{
     config::{ConfigLoadError, SaekawaConfig},
-    helpers::{
-        chuni_encoding::{decrypt_aes256_cbc, hash_endpoint, maybe_decompress_buffer},
-        winapi_ext::{winhttp_query_option, LibraryHandle, ReadStringFnError},
+    crypto::{decrypt_aes256_cbc, get_game_crypto_information, GameCryptoInformation},
+    helpers::winapi_ext::{
+        winhttp_query_option, winhttp_query_request_headers, LibraryHandle, ReadStringFnError,
     },
     score_import::execute_score_import,
-    sigscan::{self, CryptoKeys},
     types::{chuni::UpsertUserAllRequest, ToBatchManual},
 };
 
@@ -52,12 +45,6 @@ pub enum HookError {
     #[snafu(display("An error occured parsing project.conf"))]
     IniError { source: ini::Error },
 
-    #[snafu(display("An error occured calling a Win32 function: {errno}"))]
-    Win32Error { errno: u32 },
-
-    #[snafu(display("Could not find a pattern in the game executable"))]
-    CryptoScanError { source: sigscan::CryptoScanError },
-
     #[snafu(display("The configured path for failed import exists and is not a directory."))]
     FailedImportNotDir,
 
@@ -70,6 +57,9 @@ pub enum ProcessRequestError {
     #[snafu(display("Could not read URL from HINTERNET handle"))]
     UrlRead { source: ReadStringFnError },
 
+    #[snafu(display("Could not read headers from HINTERNET handle"))]
+    HeaderRead { source: ReadStringFnError },
+
     #[snafu(display("The URL does not have an endpoint"))]
     UrlMissingEndpoint,
 
@@ -80,10 +70,15 @@ pub enum ProcessRequestError {
 
     #[snafu(display("Could not read request body"))]
     ReadBody { source: io::Error },
+
+    #[snafu(display(
+        "Received encrypted request for unsupported game version. Please enable the \"No encryption\" patch on a patcher, or add encryption keys in the configuration file."
+    ))]
+    EncryptionNotSupported,
 }
 
-#[derive(Debug, Clone)]
-struct GameInformation {
+#[derive(Debug, Clone, Deserialize)]
+pub struct GameInformation {
     pub game_id: String,
     pub major: u16,
     pub minor: u8,
@@ -94,8 +89,8 @@ struct GameInformation {
 /// because some enum indexes changed between CHUNITHM and CHUNITHM NEW,
 /// namely difficulty, and later on, clear lamps.
 static GAME_MAJOR_VERSION: OnceLock<u16> = OnceLock::new();
-static CRYPTO_KEYS: OnceLock<CryptoKeys> = OnceLock::new();
-static UPSERT_USER_ALL_API: OnceLock<String> = OnceLock::new();
+
+static GAME_CRYPTO_INFORMATION: OnceLock<GameCryptoInformation> = OnceLock::new();
 
 static CONFIG: OnceLock<SaekawaConfig> = OnceLock::new();
 
@@ -137,10 +132,6 @@ pub fn hook_init(library_handle: LibraryHandle) -> Result<(), HookError> {
         }
     }
 
-    CONFIG
-        .set(config)
-        .expect("OnceLock shouldn't be initialized.");
-
     debug!("Reading version information from project.conf");
     let info = get_project_conf()?;
 
@@ -148,6 +139,11 @@ pub fn hook_init(library_handle: LibraryHandle) -> Result<(), HookError> {
         "Running on {} {}.{:0>2}.{:0>2}",
         info.game_id, info.major, info.minor, info.build
     );
+
+    debug!("Retrieving encryption information for this game version");
+    GAME_CRYPTO_INFORMATION
+        .set(get_game_crypto_information(&config, &info))
+        .expect("OnceLock shouldn't be initialized.");
 
     let ver = determine_major_version(&info);
 
@@ -157,8 +153,9 @@ pub fn hook_init(library_handle: LibraryHandle) -> Result<(), HookError> {
         .set(ver)
         .expect("OnceLock shouldn't be initialized.");
 
-    debug!("Checking if network requests are encrypted");
-    setup_network_encryption(&info)?;
+    CONFIG
+        .set(config)
+        .expect("OnceLock shouldn't be initialized.");
 
     crochet::enable!(winhttpwritedata_hook).context(CrochetSnafu)?;
     info!("Hooks enabled.");
@@ -185,7 +182,7 @@ fn winhttpwritedata_hook(
     lpdw_n_bytes_written: LPDWORD,
 ) -> BOOL {
     if let Err(e) = process_request(hrequest, lp_buffer, dw_n_bytes_to_write) {
-        error!("{e:#?}");
+        error!("Could not process request: {e:#?}");
     }
 
     call_original!(
@@ -209,16 +206,36 @@ fn process_request(
         .split('/')
         .last()
         .ok_or(ProcessRequestError::UrlMissingEndpoint)?;
-    let upsert_user_all_endpoint = UPSERT_USER_ALL_API
+    let chuni_encoding_version =
+        winhttp_query_request_headers(hrequest, "Chuni-Encoding").context(HeaderReadSnafu)?;
+    let crypto_information = GAME_CRYPTO_INFORMATION
         .get()
         .ok_or(ProcessRequestError::UninitializedState)?;
 
-    if endpoint != upsert_user_all_endpoint {
+    if chuni_encoding_version.is_some() {
+        let Some(target_endpoint) = &crypto_information.upsert_user_all_hashed_endpoint else {
+            return Err(ProcessRequestError::EncryptionNotSupported);
+        };
+
+        if endpoint != target_endpoint {
+            return Ok(());
+        }
+    } else if endpoint != crypto_information.upsert_user_all_endpoint {
         return Ok(());
     }
 
     info!("Received profile upsert request. Initiating score import...");
 
+    let content_encoding =
+        winhttp_query_request_headers(hrequest, "Content-Encoding").context(HeaderReadSnafu)?;
+    let (key, iv) = if chuni_encoding_version.is_some() {
+        (
+            crypto_information.key.clone(),
+            crypto_information.iv.clone(),
+        )
+    } else {
+        (None, None)
+    };
     let mut raw_body_slice =
         unsafe { std::slice::from_raw_parts(buffer as *const u8, bufsiz as usize) };
     let mut raw_body = Vec::with_capacity(bufsiz as usize);
@@ -243,24 +260,47 @@ fn process_request(
             return;
         };
 
-        let compressed_body = if let Some(keys) = CRYPTO_KEYS.get() {
-            match decrypt_aes256_cbc(&mut raw_body, &keys.key, &keys.iv) {
-                Ok(r) => r,
-                Err(e) => {
-                    error!("Could not decrypt request: {e:#?}");
-                    return;
+        let maybe_compressed_body = if let Some(chuni_encoding_version) = chuni_encoding_version {
+            if let (Some(key), Some(iv)) = (key, iv) {
+                match decrypt_aes256_cbc(&mut raw_body, key, iv) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        error!("Could not decrypt request: {e:#?}");
+                        return;
+                    }
                 }
+            } else {
+                error!("Received encrypted request, but missing encryption keys for Chuni-Encoding {chuni_encoding_version}");
+                return;
             }
         } else {
             raw_body
         };
 
-        let body = match maybe_decompress_buffer(compressed_body) {
-            Ok(s) => s,
-            Err(e) => {
-                error!("Could not read request as DEFLATE-compressed or plaintext: {e:#?}");
+        let body = match content_encoding {
+            Some(ce) if ce == "deflate" => {
+                let mut s = String::with_capacity(maybe_compressed_body.len() * 2);
+                let mut decoder = ZlibDecoder::new(&maybe_compressed_body[..]);
+
+                match decoder.read_to_string(&mut s) {
+                    Ok(_) => s,
+                    Err(e) => {
+                        error!("Could not read DEFLATE-compressed body as UTF-8 string: {e:?}");
+                        return;
+                    }
+                }
+            }
+            Some(ce) => {
+                error!("Received compressed request with unknown Content-Encoding {ce}");
                 return;
             }
+            None => match String::from_utf8(maybe_compressed_body) {
+                Ok(s) => s,
+                Err(e) => {
+                    error!("Could not read uncompressed body as UTF-8 string: {e:?}");
+                    return;
+                }
+            },
         };
 
         #[cfg(debug_assertions)]
@@ -326,100 +366,4 @@ fn determine_major_version(info: &GameInformation) -> u16 {
     } else {
         info.major
     }
-}
-
-fn setup_network_encryption(info: &GameInformation) -> Result<(), HookError> {
-    debug!("Getting module information of the game process");
-    let mut modinfo: MaybeUninit<MODULEINFO> = MaybeUninit::uninit();
-    let result = unsafe {
-        GetModuleInformation(
-            GetCurrentProcess(),
-            GetModuleHandleW(ptr::null_mut()),
-            modinfo.as_mut_ptr(),
-            mem::size_of::<MODULEINFO>() as u32,
-        )
-    };
-
-    if result == 0 {
-        let err = unsafe { GetLastError() };
-
-        error!("Could not get information about the game process, error code {err}");
-        return Err(HookError::Win32Error { errno: err });
-    }
-
-    let modinfo = unsafe { modinfo.assume_init() };
-    debug!(
-        "Base address: {:p}, image size: {:x}",
-        modinfo.lpBaseOfDll, modinfo.SizeOfImage
-    );
-
-    debug!("Scanning game for encryption status");
-    let encryption_enabled = unsafe {
-        sigscan::is_network_encrypted(modinfo.lpBaseOfDll as *const _, modinfo.SizeOfImage as _)
-            .context(CryptoScanSnafu)?
-    };
-
-    let endpoint = if info.game_id == "SDGS" {
-        if info.minor < 10 {
-            "UpsertUserAllApiExp"
-        } else {
-            "UpsertUserAllApiC3Exp"
-        }
-    } else {
-        "UpsertUserAllApi"
-    };
-
-    if encryption_enabled {
-        info!("Network requests are encrypted.");
-
-        debug!("Searching for encryption keys. This might take a bit...");
-
-        let keys = unsafe {
-            sigscan::get_crypto_keys(modinfo.lpBaseOfDll as *const _, modinfo.SizeOfImage as _)
-                .context(CryptoScanSnafu)?
-        };
-
-        debug!("Search completed successfully.");
-
-        #[cfg(debug_assertions)]
-        {
-            debug!(
-                "Key: {}, IV: {}, salt: {}, iterations: {}",
-                faster_hex::hex_string(&keys.key),
-                faster_hex::hex_string(&keys.iv),
-                faster_hex::hex_string(&keys.salt),
-                keys.iterations,
-            )
-        }
-
-        // For some reason, CHUNITHM SUPERSTAR/SUPERSTAR+ forgot to add "Exp" when
-        // hashing the endpoint.
-        let endpoint_password = if info.game_id == "SDGS" && info.minor < 10 {
-            "UpsertUserAllApi"
-        } else {
-            endpoint
-        };
-
-        let hashed_endpoint = hash_endpoint(endpoint_password, &keys.salt, keys.iterations);
-
-        debug!(
-            "Hashed {endpoint_password} with {:x?} to {hashed_endpoint}",
-            keys.salt
-        );
-
-        UPSERT_USER_ALL_API
-            .set(hashed_endpoint)
-            .expect("OnceLock shouldn't be initialized.");
-        CRYPTO_KEYS
-            .set(keys)
-            .expect("OnceLock shouldn't be initialized.");
-    } else {
-        info!("Network requests are not encrypted.");
-
-        UPSERT_USER_ALL_API
-            .set(endpoint.to_string())
-            .expect("OnceLock shouldn't be initialized.");
-    }
-
-    Ok(())
 }

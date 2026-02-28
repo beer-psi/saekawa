@@ -35,3 +35,26 @@ default = "your-api-key"
 [tachi]
 # The base URL of the Tachi instance to submit scores to.
 base_url = "https://kamai.tachi.ac/"
+
+## ADVANCED: Encryption support
+## Saekawa supports running with "No encryption" disabled for n-1 versions
+## of CHUNITHM Japan (aka SDBT/SDHD) by including the network keys within
+## the hook. Those who wish to run exotic builds of the game may include
+## their own encryption keys here.
+#[[keys]]
+## The game ID, as declared in project.conf under [Project] -> GameID.
+#game_id = ""
+## The game's major version, as declared in project.conf under [Version] -> VerMajor.
+#major = 0
+## The game's minor version, as declared in project.conf unser [Version] -> VerMinor.
+## Alternatively, this can be an array with exactly 2 numbers (e.g. [40, 41]), declaring
+## the range of minor versions this set of encryption keys are for.
+#minor = 0
+## The request encryption key.
+#key = []
+## The request encryption IV.
+#iv = []
+## The endpoint salt used for obfuscating the endpoint name.
+#salt = []
+## The number of PBKDF2 iterations.
+#iterations = 0

@@ -15,7 +15,10 @@ use winapi::{
         libloaderapi::{FreeLibraryAndExitThread, GetModuleFileNameW},
         processthreadsapi::{GetCurrentProcess, GetCurrentThread},
         synchapi::WaitForSingleObject,
-        winhttp::{WinHttpQueryOption, HINTERNET},
+        winhttp::{
+            WinHttpQueryHeaders, WinHttpQueryOption, ERROR_WINHTTP_HEADER_NOT_FOUND, HINTERNET,
+            WINHTTP_QUERY_CUSTOM, WINHTTP_QUERY_FLAG_REQUEST_HEADERS,
+        },
         winnt::SYNCHRONIZE,
     },
 };
@@ -104,7 +107,7 @@ pub fn read_string_from_function_call(
         buffer.resize(buffer_length as usize, 0);
         let result = reader(&mut buffer, &mut buffer_length);
 
-        if result != TRUE {
+        if !is_success(result) {
             let errno = unsafe { GetLastError() };
 
             return Err(ReadStringFnError::Other { errno });
@@ -125,6 +128,34 @@ pub fn winhttp_query_option(handle: HINTERNET, option: u32) -> Result<String, Re
         },
         |ret| ret == TRUE,
     )
+}
+
+pub fn winhttp_query_request_headers(
+    handle: HINTERNET,
+    header_name: impl AsRef<str>,
+) -> Result<Option<String>, ReadStringFnError> {
+    let pwsz_name = U16CString::from_str_truncate(header_name.as_ref());
+    let result = read_string_from_function_call(
+        |buf, buflen| unsafe {
+            WinHttpQueryHeaders(
+                handle,
+                WINHTTP_QUERY_CUSTOM | WINHTTP_QUERY_FLAG_REQUEST_HEADERS,
+                pwsz_name.as_ptr(),
+                buf.as_mut_ptr() as *mut c_void,
+                buflen,
+                ptr::null_mut() as *mut u32, // WINHTTP_NO_HEADER_INDEX
+            )
+        },
+        |ret| ret == TRUE,
+    );
+
+    match result {
+        Ok(s) => Ok(Some(s)),
+        Err(ReadStringFnError::Other { errno }) if errno == ERROR_WINHTTP_HEADER_NOT_FOUND => {
+            Ok(None)
+        }
+        Err(e) => Err(e),
+    }
 }
 
 #[cfg_attr(not(feature = "autoupdate"), allow(dead_code))]
