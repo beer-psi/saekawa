@@ -1,9 +1,8 @@
 use std::{
     io::{self, Read},
     num::ParseIntError,
-    sync::{Arc, Condvar, LazyLock, Mutex, OnceLock},
+    sync::OnceLock,
     thread,
-    time::Duration,
 };
 
 use flate2::read::ZlibDecoder;
@@ -13,24 +12,17 @@ use serde::Deserialize;
 use snafu::{prelude::Snafu, ResultExt};
 use winapi::{
     shared::{
-        basetsd::DWORD_PTR,
-        minwindef::{BOOL, DWORD, LPCVOID, LPDWORD, LPVOID},
+        minwindef::{BOOL, DWORD, LPCVOID, LPDWORD},
         winerror::ERROR_INVALID_PARAMETER,
     },
-    um::winhttp::{
-        HINTERNET, WINHTTP_CALLBACK_STATUS_HEADERS_AVAILABLE, WINHTTP_OPTION_URL,
-        WINHTTP_STATUS_CALLBACK,
-    },
+    um::winhttp::{HINTERNET, WINHTTP_OPTION_URL},
 };
 
 use crate::{
     config::{ConfigLoadError, SaekawaConfig},
     crypto::{decrypt_aes256_cbc, get_game_crypto_information, GameCryptoInformation},
-    helpers::{
-        winapi_ext::{
-            winhttp_query_option, winhttp_query_request_headers, LibraryHandle, ReadStringFnError,
-        },
-        Defer,
+    helpers::winapi_ext::{
+        winhttp_query_option, winhttp_query_request_headers, LibraryHandle, ReadStringFnError,
     },
     score_import::execute_score_import,
     types::{chuni::UpsertUserAllRequest, ToBatchManual},
@@ -103,11 +95,6 @@ static GAME_MAJOR_VERSION: OnceLock<u16> = OnceLock::new();
 static GAME_CRYPTO_INFORMATION: OnceLock<GameCryptoInformation> = OnceLock::new();
 static CONFIG: OnceLock<SaekawaConfig> = OnceLock::new();
 
-static IS_EXECUTING_IMPORT: LazyLock<Arc<(Mutex<bool>, Condvar)>> =
-    LazyLock::new(|| Arc::new((Mutex::new(false), Condvar::new())));
-static CURRENT_WINHTTP_STATUS_CALLBACK: LazyLock<Arc<Mutex<WINHTTP_STATUS_CALLBACK>>> =
-    LazyLock::new(|| Arc::new(Mutex::new(None)));
-
 #[cfg_attr(not(feature = "autoupdate"), allow(unused_variables))]
 pub fn hook_init(library_handle: LibraryHandle) -> Result<(), HookError> {
     debug!("Reading hook configuration");
@@ -172,7 +159,6 @@ pub fn hook_init(library_handle: LibraryHandle) -> Result<(), HookError> {
         .expect("OnceLock shouldn't be initialized.");
 
     crochet::enable!(winhttpwritedata_hook).context(CrochetSnafu)?;
-    crochet::enable!(winhttpsetstatuscallback_hook).context(CrochetSnafu)?;
     info!("Hooks enabled.");
 
     Ok(())
@@ -181,10 +167,6 @@ pub fn hook_init(library_handle: LibraryHandle) -> Result<(), HookError> {
 pub fn hook_release() -> Result<(), HookError> {
     if crochet::is_enabled!(winhttpwritedata_hook) {
         crochet::disable!(winhttpwritedata_hook).context(CrochetSnafu)?;
-    }
-
-    if crochet::is_enabled!(winhttpsetstatuscallback_hook) {
-        crochet::disable!(winhttpsetstatuscallback_hook).context(CrochetSnafu)?;
     }
 
     info!("Hooks disabled.");
@@ -210,56 +192,6 @@ fn winhttpwritedata_hook(
         dw_n_bytes_to_write,
         lpdw_n_bytes_written
     )
-}
-
-#[crochet::hook("winhttp.dll", "WinHttpSetStatusCallback")]
-fn winhttpsetstatuscallback_hook(
-    hrequest: HINTERNET,
-    lpfn_internet_callback: WINHTTP_STATUS_CALLBACK,
-    dw_notification_flags: DWORD,
-    dw_reserved: DWORD_PTR,
-) -> WINHTTP_STATUS_CALLBACK {
-    // This only gets called a single time by the network code into a single
-    // function pointer, so we don't have to worry about different stuff
-    // trampling on each other, at least for now.
-    *CURRENT_WINHTTP_STATUS_CALLBACK.lock().unwrap() = lpfn_internet_callback;
-
-    call_original!(
-        hrequest,
-        Some(winhttp_status_callback),
-        dw_notification_flags,
-        dw_reserved
-    )
-}
-
-extern "system" fn winhttp_status_callback(
-    hrequest: HINTERNET,
-    dw_context: DWORD_PTR,
-    dw_internet_status: DWORD,
-    lpv_status_information: LPVOID,
-    dw_status_information_length: DWORD,
-) {
-    // block the callback from being called before import is complete
-    if dw_internet_status == WINHTTP_CALLBACK_STATUS_HEADERS_AVAILABLE {
-        let (lock, cvar) = &*IS_EXECUTING_IMPORT.clone();
-        let mut executing_import = lock.lock().unwrap();
-
-        while *executing_import {
-            executing_import = cvar.wait(executing_import).unwrap();
-        }
-    }
-
-    if let Some(original_callback) = *CURRENT_WINHTTP_STATUS_CALLBACK.lock().unwrap() {
-        unsafe {
-            original_callback(
-                hrequest,
-                dw_context,
-                dw_internet_status,
-                lpv_status_information,
-                dw_status_information_length,
-            );
-        }
-    }
 }
 
 fn process_request(
@@ -330,39 +262,7 @@ fn process_request(
         debug!("raw request: {}", faster_hex::hex_string(&raw_body));
     }
 
-    // Mark the import as executing from here so that callbacks
-    // will block even if the response comes instantly
-    let (lock, _cvar) = &*IS_EXECUTING_IMPORT.clone();
-    *lock.lock().unwrap() = true;
-
-    // Drop the block after 45s, even if the import is still ongoing
-    // at Kamaitachi, since network requests time out at 60s
     thread::spawn(move || {
-        thread::sleep(Duration::from_secs(45));
-
-        let (lock, cvar) = &*IS_EXECUTING_IMPORT.clone();
-        let mut executing_import = lock.lock().unwrap();
-
-        if *executing_import {
-            *executing_import = false;
-            cvar.notify_one();
-        }
-    });
-
-    thread::spawn(move || {
-        // Import execution should stop when this thread exits at any moment.
-        // The "proper" way to do this would probably be to extract the existing
-        // code out into a function but I don't careeeee
-        let _defer = Defer::new(|| {
-            let (lock, cvar) = &*IS_EXECUTING_IMPORT.clone();
-            let mut executing_import = lock.lock().unwrap();
-
-            if *executing_import {
-                *executing_import = false;
-                cvar.notify_one();
-            }
-        });
-
         let Some(config) = CONFIG.get() else {
             error!("Config has not been initialized?");
             return;
