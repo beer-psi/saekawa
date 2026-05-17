@@ -6,7 +6,10 @@ use serde::{Deserialize, Serialize};
 pub struct BatchManualScore {
     pub match_type: MatchType,
     pub identifier: String,
-    pub difficulty: Difficulty,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub difficulty: Option<Difficulty>,
+
     pub score: u32,
     pub note_lamp: NoteLamp,
     pub clear_lamp: ClearLamp,
@@ -109,6 +112,9 @@ pub enum MatchType {
 
     #[serde(rename = "tachiSongID")]
     TachiSongId,
+
+    #[serde(rename = "gcmInGameIDSpecialChart")]
+    GcmInGameIdSpecialChart,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

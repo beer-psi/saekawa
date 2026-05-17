@@ -91,9 +91,17 @@ impl UserPlaylog {
             score: self.score,
             note_lamp,
             clear_lamp,
-            match_type: MatchType::InGameId,
+            match_type: if difficulty == Difficulty::WorldsEnd {
+                MatchType::GcmInGameIdSpecialChart
+            } else {
+                MatchType::InGameId
+            },
             identifier: self.music_id.clone(),
-            difficulty,
+            difficulty: if difficulty == Difficulty::WorldsEnd {
+                None
+            } else {
+                Some(difficulty)
+            },
             time_achieved,
             judgements: Some(judgements),
             optional: Some(OptionalMetrics {
@@ -142,18 +150,7 @@ impl ToBatchManual for UpsertUserAllRequest {
             .upsert_user_all
             .user_playlog_list
             .iter()
-            .filter_map(|p| {
-                let conv = p.to_batch_manual(major_version, replace_tz.clone());
-
-                if conv
-                    .as_ref()
-                    .is_ok_and(|s| s.difficulty != Difficulty::WorldsEnd)
-                {
-                    conv.ok()
-                } else {
-                    None
-                }
-            })
+            .filter_map(|p| p.to_batch_manual(major_version, replace_tz.clone()).ok())
             .collect::<Vec<_>>();
 
         BatchManualImport {
