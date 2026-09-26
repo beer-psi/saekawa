@@ -63,7 +63,7 @@ pub enum NoteLamp {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, TryFromPrimitive)]
-#[repr(u32)]
+#[repr(u8)]
 pub enum Difficulty {
     #[serde(rename = "BASIC")]
     Basic = 0,
@@ -128,5 +128,18 @@ pub struct Judgements {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OptionalMetrics {
-    pub max_combo: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fast: Option<u32>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub slow: Option<u32>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_combo: Option<u32>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub score_graph: Option<Vec<i32>>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub life_graph: Option<Vec<i32>>,
 }

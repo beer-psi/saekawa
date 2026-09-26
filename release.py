@@ -1,3 +1,9 @@
+# /// script
+# requires-python = ">=3.14"
+# dependencies = [
+#     "python-dotenv>=1.2.2",
+# ]
+# ///
 import hashlib
 import json
 import os
@@ -6,6 +12,9 @@ import subprocess
 from pathlib import Path
 
 import tomllib
+from dotenv import load_dotenv
+
+load_dotenv()
 
 CARGO_TOML_PATH = Path("./Cargo.toml")
 CARGO_BUILD_COMMAND = (

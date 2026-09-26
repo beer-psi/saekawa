@@ -11,7 +11,7 @@ pub struct BatchManualClasses {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, TryFromPrimitive)]
-#[repr(u32)]
+#[repr(i32)]
 pub enum ClassEmblem {
     #[serde(rename = "DAN_I")]
     First = 1,

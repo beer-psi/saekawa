@@ -1,25 +1,18 @@
-use std::ptr;
+use std::{mem::MaybeUninit, ptr};
 
-use snafu::prelude::Snafu;
-use widestring::U16CString;
 use winapi::{
-    ctypes::c_void,
     shared::{
-        minwindef::{FALSE, HINSTANCE, HMODULE, TRUE},
+        minwindef::{FALSE, HINSTANCE},
         ntdef::HANDLE,
-        winerror::ERROR_INSUFFICIENT_BUFFER,
     },
     um::{
         errhandlingapi::GetLastError,
         handleapi::{CloseHandle, DuplicateHandle},
-        libloaderapi::{FreeLibraryAndExitThread, GetModuleFileNameW},
+        libloaderapi::FreeLibraryAndExitThread,
         processthreadsapi::{GetCurrentProcess, GetCurrentThread},
+        profileapi::{QueryPerformanceCounter, QueryPerformanceFrequency},
         synchapi::WaitForSingleObject,
-        winhttp::{
-            WinHttpQueryHeaders, WinHttpQueryOption, ERROR_WINHTTP_HEADER_NOT_FOUND, HINTERNET,
-            WINHTTP_QUERY_CUSTOM, WINHTTP_QUERY_FLAG_REQUEST_HEADERS,
-        },
-        winnt::SYNCHRONIZE,
+        winnt::{LARGE_INTEGER, SYNCHRONIZE},
     },
 };
 
@@ -81,95 +74,38 @@ impl LibraryHandle {
     }
 }
 
-#[derive(Debug, Snafu)]
-pub enum ReadStringFnError {
-    InvalidData,
-    Other { errno: u32 },
+const NANOS_PER_SEC: u64 = 1_000_000_000;
+
+// https://github.com/rust-lang/rust/blob/feaadeeaca7db0594da854e7c8c07495341c7439/library/std/src/sys/helpers/mod.rs#L23-L34
+/// Computes `(value*numerator)/denom` without overflow, as long as both
+/// `numerator*denom` and the overall result fit into `u64` (which is the case
+/// for our time conversions).
+#[cfg_attr(not(target_os = "windows"), allow(unused))] // Not used on all platforms.
+pub fn mul_div_u64(value: u64, numerator: u64, denom: u64) -> u64 {
+    let q = value / denom;
+    let r = value % denom;
+    // Decompose value as (value/denom*denom + value%denom),
+    // substitute into (value*numerator)/denom and simplify.
+    // r < denom, so (denom*numerator) is the upper bound of (r*numerator)
+    q * numerator + r * numerator / denom
 }
 
-pub fn read_string_from_function_call(
-    reader: impl Fn(&mut [u16], &mut u32) -> i32,
-    is_success: impl Fn(i32) -> bool,
-) -> Result<String, ReadStringFnError> {
-    let mut buffer = vec![0u16; 255];
-    let mut buffer_length = 255;
-    let result = reader(&mut buffer, &mut buffer_length);
+// https://github.com/rust-lang/rust/blob/feaadeeaca7db0594da854e7c8c07495341c7439/library/std/src/sys/time/windows.rs#L29-L47
+pub fn perf_counter_ns() -> u64 {
+    let freq = unsafe {
+        let mut freq: MaybeUninit<LARGE_INTEGER> = MaybeUninit::uninit();
 
-    if is_success(result) {
-        let out = U16CString::from_vec_truncate(&buffer[..buffer_length as usize]);
+        QueryPerformanceFrequency(freq.as_mut_ptr());
+        *freq.assume_init().QuadPart()
+    };
+    let now = unsafe {
+        let mut now: MaybeUninit<LARGE_INTEGER> = MaybeUninit::uninit();
 
-        return out.to_string().map_err(|_| ReadStringFnError::InvalidData);
-    }
+        QueryPerformanceCounter(now.as_mut_ptr());
+        *now.assume_init().QuadPart()
+    };
+    let instant_nsec = mul_div_u64(now as u64, NANOS_PER_SEC, freq as u64);
+    let instant_nsec = instant_nsec + (u64::MAX / 4);
 
-    let errno = unsafe { GetLastError() };
-
-    if errno == ERROR_INSUFFICIENT_BUFFER {
-        buffer.resize(buffer_length as usize, 0);
-        let result = reader(&mut buffer, &mut buffer_length);
-
-        if !is_success(result) {
-            let errno = unsafe { GetLastError() };
-
-            return Err(ReadStringFnError::Other { errno });
-        }
-
-        let out = U16CString::from_vec_truncate(&buffer[..buffer_length as usize]);
-
-        return out.to_string().map_err(|_| ReadStringFnError::InvalidData);
-    }
-
-    Err(ReadStringFnError::Other { errno })
-}
-
-pub fn winhttp_query_option(handle: HINTERNET, option: u32) -> Result<String, ReadStringFnError> {
-    read_string_from_function_call(
-        |buf, buflen| unsafe {
-            WinHttpQueryOption(handle, option, buf.as_mut_ptr() as *mut c_void, buflen)
-        },
-        |ret| ret == TRUE,
-    )
-}
-
-pub fn winhttp_query_request_headers(
-    handle: HINTERNET,
-    header_name: impl AsRef<str>,
-) -> Result<Option<String>, ReadStringFnError> {
-    let pwsz_name = U16CString::from_str_truncate(header_name.as_ref());
-    let result = read_string_from_function_call(
-        |buf, buflen| unsafe {
-            WinHttpQueryHeaders(
-                handle,
-                WINHTTP_QUERY_CUSTOM | WINHTTP_QUERY_FLAG_REQUEST_HEADERS,
-                pwsz_name.as_ptr(),
-                buf.as_mut_ptr() as *mut c_void,
-                buflen,
-                ptr::null_mut() as *mut u32, // WINHTTP_NO_HEADER_INDEX
-            )
-        },
-        |ret| ret == TRUE,
-    );
-
-    match result {
-        Ok(s) => Ok(Some(s)),
-        Err(ReadStringFnError::Other { errno }) if errno == ERROR_WINHTTP_HEADER_NOT_FOUND => {
-            Ok(None)
-        }
-        Err(e) => Err(e),
-    }
-}
-
-#[cfg_attr(not(feature = "autoupdate"), allow(dead_code))]
-pub fn get_module_file_name(handle: HMODULE) -> Result<String, ReadStringFnError> {
-    read_string_from_function_call(
-        |buf, buflen| unsafe {
-            let ret = GetModuleFileNameW(handle, buf.as_mut_ptr(), *buflen) as i32;
-
-            if GetLastError() == ERROR_INSUFFICIENT_BUFFER {
-                *buflen = 32767;
-            }
-
-            ret
-        },
-        |_| unsafe { GetLastError() != ERROR_INSUFFICIENT_BUFFER },
-    )
+    instant_nsec
 }

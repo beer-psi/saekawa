@@ -15,8 +15,6 @@ use serde::{Deserialize, Serialize};
 use snafu::{ResultExt, Snafu};
 use url::Url;
 
-use crate::crypto::CryptoKeys;
-
 use self::defaults::*;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -24,9 +22,6 @@ pub struct SaekawaConfig {
     pub general: GeneralConfig,
     pub cards: HashMap<String, String>,
     pub tachi: TachiConfig,
-
-    #[serde(default = "Vec::new")]
-    pub keys: Vec<CryptoKeys>,
 }
 
 #[derive(Snafu, Debug)]
@@ -96,7 +91,6 @@ impl SaekawaConfig {
                     general: new_general_config,
                     cards: new_cards_config,
                     tachi: new_tachi_config,
-                    keys: vec![],
                 };
 
                 {
