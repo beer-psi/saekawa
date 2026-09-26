@@ -1,8 +1,8 @@
 #![cfg(windows)]
 mod config;
 mod consts;
-mod crypto;
 mod helpers;
+mod hooks;
 mod logging;
 mod saekawa;
 mod score_import;
