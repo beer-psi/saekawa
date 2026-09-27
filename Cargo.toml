@@ -47,7 +47,6 @@ features = [
     "processthreadsapi",
     "libloaderapi",
     "errhandlingapi",
-    "winhttp",
     "synchapi",
     "debugapi",
     "wincon",

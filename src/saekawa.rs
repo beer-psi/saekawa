@@ -12,6 +12,9 @@ use crate::{
 };
 
 #[cfg(feature = "autoupdate")]
+use log::error;
+
+#[cfg(feature = "autoupdate")]
 use crate::updater::self_update;
 
 #[derive(Debug, Snafu)]
