@@ -1,5 +1,6 @@
 use std::{
     ffi::c_void,
+    iter,
     mem::{self, MaybeUninit},
     ptr,
     sync::{
@@ -22,7 +23,7 @@ use winapi::um::{
 };
 
 use crate::{
-    helpers::{defer::defer, winapi_ext::perf_counter_ns},
+    helpers::winapi_ext::perf_counter_ns,
     saekawa::CONFIG,
     score_import::execute_score_import,
     types::{
@@ -74,6 +75,7 @@ static COUNT_GUILTY_JUDGE_TOTAL: OnceLock<CountGuiltyJudgeTotalFn> = OnceLock::n
 static USER_DATA_MANAGER_IMPL_PLAY_RECORDS_OFFSET: OnceLock<usize> = OnceLock::new();
 
 static GRAPH_LAST_RECORDED: AtomicU64 = AtomicU64::new(0);
+static GRAPH_LAST_RECORDED_ELAPSED: AtomicU64 = AtomicU64::new(0);
 static SCORE_GRAPH_VALUES: LazyLock<Arc<Mutex<Vec<i32>>>> =
     LazyLock::new(|| Arc::new(Mutex::new(Vec::with_capacity(270))));
 static LIFE_GRAPH_VALUES: LazyLock<Arc<Mutex<Vec<i32>>>> =
@@ -376,12 +378,25 @@ fn hook_judge_context_on_judge(
     judge_kind: *const u8,
     timing_slot: u32,
 ) {
-    // We do processing before the original function because the original function
-    // calls our SkillPlaying::evalDeathPenaltyUnit hook, which we use to track
-    // life counts. However, that one is also called by *another* function
-    // before the first note is ever hit, so there are stray data points in the
-    // graph if we don't control when we do our processing with `SHOULD_GRAPH_LIFE`.
-    let _call_original = defer(|| unsafe {
+    // The original function calls SkillPlaying::evalDeathPenaltyUnit, which we use
+    // to track life counts. However, that function is also called by something else
+    // before the first note is ever hit, so we use a guard to prevent stray data points.
+
+    let last_recorded_ns = GRAPH_LAST_RECORDED.load(Ordering::Relaxed);
+    let last_recorded = Duration::from_nanos(last_recorded_ns);
+    let current_time_ns = perf_counter_ns();
+    let elapsed = (Duration::from_nanos(current_time_ns) - last_recorded).as_secs();
+    let should_graph = elapsed >= 1;
+
+    SHOULD_GRAPH_LIFE.store(should_graph, Ordering::Release);
+
+    // We also want to pass down this information to our other hook, so that data points
+    // can be repeated in the event where notes are more than 1s apart.
+    GRAPH_LAST_RECORDED_ELAPSED.store(elapsed, Ordering::Release);
+
+    // This will then call our [hook_skill_playing_eval_death_penalty_unit] hook
+    // which will exit early if [SHOULD_GRAPH_LIFE] is false (elapsed >= 1 is false).
+    unsafe {
         HookJudgeContextOnJudge.call(
             this,
             edx,
@@ -390,14 +405,10 @@ fn hook_judge_context_on_judge(
             note_info_id,
             judge_kind,
             timing_slot,
-        )
-    });
+        );
+    }
 
-    let last_recorded = Duration::from_nanos(GRAPH_LAST_RECORDED.load(Ordering::Relaxed));
-    let current_time = perf_counter_ns();
-    let elapsed = (Duration::from_nanos(current_time) - last_recorded).as_secs();
-
-    if elapsed < 1 {
+    if !should_graph {
         return;
     }
 
@@ -419,14 +430,24 @@ fn hook_judge_context_on_judge(
 
     if score_graph.is_empty() {
         score_graph.push(1_010_000);
+    } else if elapsed > 1 {
+        // If more than 1 second has passed since the last note, need to repeat the last score to fill the graph.
+        match usize::try_from(elapsed) {
+            Ok(elapsed_usize) => {
+                let last_score = *score_graph
+                    .last()
+                    .expect("in branch where score_graph.is_empty() is false, so there should be a last element");
+
+                score_graph.extend(iter::repeat_n(last_score, elapsed_usize - 1));
+            },
+            Err(_) => error!("Too much time has passed since last note! last_recorded={last_recorded_ns} current_time={current_time_ns} elapsed={elapsed}"),
+        }
     }
 
     score_graph.push(remaining_score);
-    GRAPH_LAST_RECORDED.store(current_time, Ordering::Relaxed);
+    GRAPH_LAST_RECORDED.store(current_time_ns, Ordering::Relaxed);
 
     debug!("JudgeContext::OnJudge: score={}", remaining_score);
-
-    SHOULD_GRAPH_LIFE.store(true, Ordering::Release);
 }
 
 fn hook_skill_playing_eval_death_penalty_unit(
@@ -454,6 +475,7 @@ fn hook_skill_playing_eval_death_penalty_unit(
         return result;
     }
 
+    let elapsed = GRAPH_LAST_RECORDED_ELAPSED.load(Ordering::Acquire);
     let Some(count_guilty_judge_total) = COUNT_GUILTY_JUDGE_TOTAL.get() else {
         error!("CountGuiltyJudgeTotal address is unknown");
         return result;
@@ -473,6 +495,18 @@ fn hook_skill_playing_eval_death_penalty_unit(
 
     if life_graph.is_empty() {
         life_graph.push(initial_gauge);
+    } else if elapsed > 1 {
+        // If more than 1 second has passed since the last note, need to repeat the last score to fill the graph.
+        match usize::try_from(elapsed) {
+            Ok(elapsed_usize) => {
+                let last_life = *life_graph
+                    .last()
+                    .expect("in branch where life_graph.is_empty() is false, so there should be a last element");
+
+                life_graph.extend(iter::repeat_n(last_life, elapsed_usize - 1));
+            }
+            Err(_) => error!("Too much time has passed since last note! elapsed={elapsed}"),
+        }
     }
 
     life_graph.push(initial_gauge - gauge_lost);
