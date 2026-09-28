@@ -1,10 +1,9 @@
 use std::{
     ffi::c_void,
-    iter,
     mem::{self, MaybeUninit},
     ptr,
     sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicI32, AtomicU64, Ordering},
         Arc, LazyLock, Mutex, OnceLock,
     },
     thread,
@@ -48,12 +47,15 @@ static_detour! {
     pub static HookPlayMusicStateLoadInitFunc: unsafe extern "fastcall" fn(
         *mut c_void, *mut c_void
     );
-    pub static HookJudgeContextOnJudge: unsafe extern "fastcall" fn(
-        *mut JudgeContext, *mut c_void, u32, *const i32, u32, *const u8, u32
+    pub static HookPlayMusicStatePlayUpdateFunc: unsafe extern "fastcall" fn(
+        *mut c_void, *mut c_void
     );
-    pub static HookSkillPlayingEvalDeathPenaltyUnit: unsafe extern "fastcall" fn(
-        *mut c_void, *mut c_void, *const c_void, *const i32, *mut c_void, *mut f64, *mut bool
-    ) -> bool;
+    pub static HookGetLostScore: unsafe extern "fastcall" fn(
+        *const c_void, *mut c_void
+    ) -> i32;
+    pub static HookGetLifeRemaining: unsafe extern "fastcall" fn(
+        *const JudgeContext, *mut c_void
+    ) -> i32;
     pub static HookUserDataManagerImplAddPlayRecord: unsafe extern "fastcall" fn(
         *mut UserDataManagerImpl, *mut c_void, i32, *mut c_void, *const JudgeContext, *mut c_void, *mut c_void, u32
     );
@@ -62,6 +64,7 @@ static_detour! {
 type SkillIdToClearTypeFn = unsafe extern "fastcall" fn(*const i32, *mut c_void, bool) -> u8;
 type UserDataManagerGetUserDataFn =
     unsafe extern "fastcall" fn(*const UserDataManager) -> *const UserData;
+type GetJudgeContextFn = unsafe extern "C" fn() -> *const JudgeContext;
 type JudgeContextGetTrackResultFn =
     unsafe extern "fastcall" fn(*const JudgeContext) -> *const TrackResult;
 type CountGuiltyJudgeTotalFn =
@@ -69,18 +72,19 @@ type CountGuiltyJudgeTotalFn =
 
 static SKILL_ID_TO_CLEAR_TYPE: OnceLock<SkillIdToClearTypeFn> = OnceLock::new();
 static USER_DATA_MANAGER_GET_USER_DATA: OnceLock<UserDataManagerGetUserDataFn> = OnceLock::new();
+static GET_JUDGE_CONTEXT: OnceLock<GetJudgeContextFn> = OnceLock::new();
 static JUDGE_CONTEXT_GET_TRACK_RESULT: OnceLock<JudgeContextGetTrackResultFn> = OnceLock::new();
 static COUNT_GUILTY_JUDGE_TOTAL: OnceLock<CountGuiltyJudgeTotalFn> = OnceLock::new();
 
 static USER_DATA_MANAGER_IMPL_PLAY_RECORDS_OFFSET: OnceLock<usize> = OnceLock::new();
 
 static GRAPH_LAST_RECORDED: AtomicU64 = AtomicU64::new(0);
-static GRAPH_LAST_RECORDED_ELAPSED: AtomicU64 = AtomicU64::new(0);
+static LOST_SCORE: AtomicI32 = AtomicI32::new(0);
+static LIFE_REMAINING: AtomicI32 = AtomicI32::new(0);
 static SCORE_GRAPH_VALUES: LazyLock<Arc<Mutex<Vec<i32>>>> =
     LazyLock::new(|| Arc::new(Mutex::new(Vec::with_capacity(270))));
 static LIFE_GRAPH_VALUES: LazyLock<Arc<Mutex<Vec<i32>>>> =
     LazyLock::new(|| Arc::new(Mutex::new(Vec::with_capacity(270))));
-static SHOULD_GRAPH_LIFE: AtomicBool = AtomicBool::new(false);
 
 #[derive(Debug, Snafu)]
 pub enum HookError {
@@ -130,8 +134,9 @@ pub fn attach_all() -> Result<(), HookError> {
 
     resolve_functions(&module_info, scan_mode)?;
     attach_hook_playmusic_state_load_initfunc(&module_info, scan_mode)?;
-    attach_hook_judge_context_on_judge(&module_info, scan_mode)?;
-    attach_hook_skill_playing_eval_death_penalty_unit(&module_info, scan_mode)?;
+    attach_hook_playmusic_state_play_updatefunc(&module_info, scan_mode)?;
+    attach_hook_get_lost_score(&module_info, scan_mode)?;
+    attach_hook_get_life_remaining(&module_info, scan_mode)?;
     attach_hook_user_data_manager_impl_add_play_record(&module_info, scan_mode)?;
     Ok(())
 }
@@ -187,6 +192,17 @@ fn resolve_functions(module_info: &MODULEINFO, scan_mode: ScanMode) -> Result<()
         USER_DATA_MANAGER_GET_USER_DATA.get_or_init(|| mem::transmute::<_, _>(address));
     }
 
+    let address = scan_signature(
+        module_info,
+        scan_mode,
+        "E8 ?? ?? ?? ?? 8B C8 E8 ?? ?? ?? ?? 8B B7",
+    )?;
+
+    unsafe {
+        debug!("GetJudgeContext={:p}", address);
+        GET_JUDGE_CONTEXT.get_or_init(|| mem::transmute::<_, _>(address));
+    }
+
     let address = scan_signature(module_info, scan_mode, "8D 8B ?? ?? ?? ?? FF 77")?;
 
     unsafe {
@@ -233,7 +249,7 @@ fn attach_hook_playmusic_state_load_initfunc(
         HookPlayMusicStateLoadInitFunc
             .initialize(
                 mem::transmute::<_, _>(address),
-                hook_play_music_state_load_initfunc,
+                hook_playmusic_state_load_initfunc,
             )
             .map_err(|e| HookError::DetourError { error: e })?;
     }
@@ -241,39 +257,55 @@ fn attach_hook_playmusic_state_load_initfunc(
     Ok(())
 }
 
-fn attach_hook_judge_context_on_judge(
+fn attach_hook_playmusic_state_play_updatefunc(
     module_info: &MODULEINFO,
     scan_mode: ScanMode,
 ) -> Result<(), HookError> {
     let address = scan_signature(
         module_info,
         scan_mode,
-        "81 EC ?? ?? ?? ?? A1 ?? ?? ?? ?? 33 C4 89 84 24 ?? ?? ?? ?? 55 56 ",
+        "53 56 57 6A ?? 8B F1 E8 ?? ?? ?? ?? 6A ?? 8B CE E8 ?? ?? ?? ?? 8B 1D",
     )?;
 
     unsafe {
-        debug!("JudgeContext::OnJudge={:p}", address);
-        HookJudgeContextOnJudge
-            .initialize(mem::transmute::<_, _>(address), hook_judge_context_on_judge)
+        debug!("projGame::PlayMusic::State_Play_updateFunc={:p}", address);
+        HookPlayMusicStatePlayUpdateFunc
+            .initialize(
+                mem::transmute::<_, _>(address),
+                hook_playmusic_state_play_updatefunc,
+            )
             .map_err(|e| HookError::DetourError { error: e })?;
     }
 
     Ok(())
 }
 
-fn attach_hook_skill_playing_eval_death_penalty_unit(
+fn attach_hook_get_lost_score(
     module_info: &MODULEINFO,
     scan_mode: ScanMode,
 ) -> Result<(), HookError> {
-    let address = scan_signature(module_info, scan_mode, "83 EC ?? 53 55 8B 6C 24 ?? 32 DB")?;
+    let address = scan_signature(module_info, scan_mode, "E8 ?? ?? ?? ?? 8B 4F ?? 2B D8")?;
 
     unsafe {
-        debug!("SkillPlaying::EvalDeathPenaltyUnit={:p}", address);
-        HookSkillPlayingEvalDeathPenaltyUnit
-            .initialize(
-                mem::transmute::<_, _>(address),
-                hook_skill_playing_eval_death_penalty_unit,
-            )
+        debug!("projGame::TrackResult::GetLostScore={:p}", address);
+        HookGetLostScore
+            .initialize(mem::transmute::<_, _>(address), hook_get_lost_score)
+            .map_err(|e| HookError::DetourError { error: e })?;
+    }
+
+    Ok(())
+}
+
+fn attach_hook_get_life_remaining(
+    module_info: &MODULEINFO,
+    scan_mode: ScanMode,
+) -> Result<(), HookError> {
+    let address = scan_signature(module_info, scan_mode, "E8 ?? ?? ?? ?? 8B F8 8D 4E ?? B8")?;
+
+    unsafe {
+        debug!("projGame::JudgeContext::GetLifeRemaining={:p}", address);
+        HookGetLifeRemaining
+            .initialize(mem::transmute::<_, _>(address), hook_get_life_remaining)
             .map_err(|e| HookError::DetourError { error: e })?;
     }
 
@@ -308,10 +340,13 @@ pub fn enable_all() -> Result<(), HookError> {
         HookPlayMusicStateLoadInitFunc
             .enable()
             .map_err(|e| HookError::DetourError { error: e })?;
-        HookJudgeContextOnJudge
+        HookPlayMusicStatePlayUpdateFunc
             .enable()
             .map_err(|e| HookError::DetourError { error: e })?;
-        HookSkillPlayingEvalDeathPenaltyUnit
+        HookGetLostScore
+            .enable()
+            .map_err(|e| HookError::DetourError { error: e })?;
+        HookGetLifeRemaining
             .enable()
             .map_err(|e| HookError::DetourError { error: e })?;
         HookUserDataManagerImplAddPlayRecord
@@ -327,13 +362,16 @@ pub fn disable_all() -> Result<(), HookError> {
         HookPlayMusicStateLoadInitFunc
             .disable()
             .map_err(|e| HookError::DetourError { error: e })?;
+        HookPlayMusicStatePlayUpdateFunc
+            .disable()
+            .map_err(|e| HookError::DetourError { error: e })?;
+        HookGetLostScore
+            .disable()
+            .map_err(|e| HookError::DetourError { error: e })?;
+        HookGetLifeRemaining
+            .disable()
+            .map_err(|e| HookError::DetourError { error: e })?;
         HookUserDataManagerImplAddPlayRecord
-            .disable()
-            .map_err(|e| HookError::DetourError { error: e })?;
-        HookJudgeContextOnJudge
-            .disable()
-            .map_err(|e| HookError::DetourError { error: e })?;
-        HookSkillPlayingEvalDeathPenaltyUnit
             .disable()
             .map_err(|e| HookError::DetourError { error: e })?;
     }
@@ -341,7 +379,7 @@ pub fn disable_all() -> Result<(), HookError> {
     Ok(())
 }
 
-fn hook_play_music_state_load_initfunc(this: *mut c_void, edx: *mut c_void) {
+fn hook_playmusic_state_load_initfunc(this: *mut c_void, edx: *mut c_void) {
     unsafe {
         HookPlayMusicStateLoadInitFunc.call(this, edx);
     }
@@ -362,163 +400,82 @@ fn hook_play_music_state_load_initfunc(this: *mut c_void, edx: *mut c_void) {
             return;
         }
     };
+    let Some(get_judge_context) = GET_JUDGE_CONTEXT.get() else {
+        error!("UserDataManager::GetJudgeContext was not initialized.");
+        return;
+    };
+
+    let life_remaining = unsafe {
+        let judge_context = get_judge_context();
+        HookGetLifeRemaining.call(judge_context, ptr::null_mut())
+    };
 
     score_graph.clear();
     life_graph.clear();
     GRAPH_LAST_RECORDED.store(0, Ordering::Relaxed);
-    SHOULD_GRAPH_LIFE.store(false, Ordering::Release);
+    LOST_SCORE.store(0, Ordering::Relaxed);
+    LIFE_REMAINING.store(life_remaining, Ordering::Relaxed);
 }
 
-fn hook_judge_context_on_judge(
-    this: *mut JudgeContext,
-    edx: *mut c_void,
-    judge_info_id: u32,
-    note_type: *const i32,
-    note_info_id: u32,
-    judge_kind: *const u8,
-    timing_slot: u32,
-) {
-    // The original function calls SkillPlaying::evalDeathPenaltyUnit, which we use
-    // to track life counts. However, that function is also called by something else
-    // before the first note is ever hit, so we use a guard to prevent stray data points.
-
-    let last_recorded_ns = GRAPH_LAST_RECORDED.load(Ordering::Relaxed);
-    let last_recorded = Duration::from_nanos(last_recorded_ns);
-    let current_time_ns = perf_counter_ns();
-    let elapsed = (Duration::from_nanos(current_time_ns) - last_recorded).as_secs();
-    let should_graph = elapsed >= 1;
-
-    SHOULD_GRAPH_LIFE.store(should_graph, Ordering::Release);
-
-    // We also want to pass down this information to our other hook, so that data points
-    // can be repeated in the event where notes are more than 1s apart.
-    GRAPH_LAST_RECORDED_ELAPSED.store(elapsed, Ordering::Release);
-
-    // This will then call our [hook_skill_playing_eval_death_penalty_unit] hook
-    // which will exit early if [SHOULD_GRAPH_LIFE] is false (elapsed >= 1 is false).
+fn hook_playmusic_state_play_updatefunc(this: *mut c_void, edx: *mut c_void) {
     unsafe {
-        HookJudgeContextOnJudge.call(
-            this,
-            edx,
-            judge_info_id,
-            note_type,
-            note_info_id,
-            judge_kind,
-            timing_slot,
-        );
+        HookPlayMusicStatePlayUpdateFunc.call(this, edx);
     }
 
-    if !should_graph {
+    let current_time_ns = perf_counter_ns();
+    let current_time = Duration::from_nanos(current_time_ns);
+    let last_recorded_ns = GRAPH_LAST_RECORDED.load(Ordering::Acquire);
+    let last_recorded = Duration::from_nanos(last_recorded_ns);
+    let elapsed = (current_time - last_recorded).as_secs();
+
+    if elapsed < 1 {
         return;
     }
 
-    let Some(judge_context_get_track_result) = JUDGE_CONTEXT_GET_TRACK_RESULT.get() else {
-        error!("JudgeContext::GetTrackResult address is unknown");
-        return;
-    };
-    let mut score_graph = match SCORE_GRAPH_VALUES.lock() {
-        Ok(s) => s,
+    let lost_score = LOST_SCORE.load(Ordering::Acquire);
+    let life_remaining = LIFE_REMAINING.load(Ordering::Acquire);
+
+    debug!(
+        "projGame::PlayMusic::State_Play_updateFunc tick: last={last_recorded_ns} current={current_time_ns} elapsed_secs={elapsed} lost_score={lost_score} life_remaining={life_remaining}"
+    );
+
+    GRAPH_LAST_RECORDED.store(current_time_ns, Ordering::Release);
+
+    match SCORE_GRAPH_VALUES.lock() {
+        Ok(mut g) => {
+            g.push(1_010_000 - lost_score);
+        }
         Err(e) => {
             error!("Failed to acquire mutex for score graph: {e:#?}");
             return;
         }
     };
 
-    let tr = unsafe { judge_context_get_track_result(this) };
-    let score_lost = unsafe { (*tr).judge_stats.score_lost };
-    let remaining_score = 1_010_000 - score_lost;
-
-    if score_graph.is_empty() {
-        score_graph.push(1_010_000);
-    } else if elapsed > 1 {
-        // If more than 1 second has passed since the last note, need to repeat the last score to fill the graph.
-        match usize::try_from(elapsed) {
-            Ok(elapsed_usize) => {
-                let last_score = *score_graph
-                    .last()
-                    .expect("in branch where score_graph.is_empty() is false, so there should be a last element");
-
-                score_graph.extend(iter::repeat_n(last_score, elapsed_usize - 1));
-            },
-            Err(_) => error!("Too much time has passed since last note! last_recorded={last_recorded_ns} current_time={current_time_ns} elapsed={elapsed}"),
+    match LIFE_GRAPH_VALUES.lock() {
+        Ok(mut g) => {
+            g.push(life_remaining);
         }
-    }
-
-    score_graph.push(remaining_score);
-    GRAPH_LAST_RECORDED.store(current_time_ns, Ordering::Relaxed);
-
-    debug!("JudgeContext::OnJudge: score={}", remaining_score);
-}
-
-fn hook_skill_playing_eval_death_penalty_unit(
-    this: *mut c_void,
-    edx: *mut c_void,
-    skill_config: *const c_void,
-    event: *const i32,
-    a3: *mut c_void,
-    gauge: *mut f64,
-    death_flag: *mut bool,
-) -> bool {
-    let result = unsafe {
-        HookSkillPlayingEvalDeathPenaltyUnit.call(
-            this,
-            edx,
-            skill_config,
-            event,
-            a3,
-            gauge,
-            death_flag,
-        )
-    };
-
-    if !SHOULD_GRAPH_LIFE.fetch_and(false, Ordering::AcqRel) {
-        return result;
-    }
-
-    let elapsed = GRAPH_LAST_RECORDED_ELAPSED.load(Ordering::Acquire);
-    let Some(count_guilty_judge_total) = COUNT_GUILTY_JUDGE_TOTAL.get() else {
-        error!("CountGuiltyJudgeTotal address is unknown");
-        return result;
-    };
-    let mut life_graph = match LIFE_GRAPH_VALUES.lock() {
-        Ok(g) => g,
         Err(e) => {
             error!("Failed to acquire mutex for life graph: {e:#?}");
-            return result;
+            return;
         }
     };
+}
 
-    let threshold = unsafe { skill_config.byte_add(0x0C).cast::<u8>() };
-    let initial_gauge = unsafe { *skill_config.byte_add(0x10).cast::<i32>() };
-    let gauge_lost =
-        unsafe { count_guilty_judge_total(event as *const _, ptr::null_mut(), threshold) };
+fn hook_get_lost_score(this: *const c_void, edx: *mut c_void) -> i32 {
+    let lost_score = unsafe { HookGetLostScore.call(this, edx) };
 
-    if life_graph.is_empty() {
-        life_graph.push(initial_gauge);
-    } else if elapsed > 1 {
-        // If more than 1 second has passed since the last note, need to repeat the last score to fill the graph.
-        match usize::try_from(elapsed) {
-            Ok(elapsed_usize) => {
-                let last_life = *life_graph
-                    .last()
-                    .expect("in branch where life_graph.is_empty() is false, so there should be a last element");
+    LOST_SCORE.store(lost_score, Ordering::Release);
 
-                life_graph.extend(iter::repeat_n(last_life, elapsed_usize - 1));
-            }
-            Err(_) => error!("Too much time has passed since last note! elapsed={elapsed}"),
-        }
-    }
+    lost_score
+}
 
-    life_graph.push(initial_gauge - gauge_lost);
+fn hook_get_life_remaining(this: *const JudgeContext, edx: *mut c_void) -> i32 {
+    let life_remaining = unsafe { HookGetLifeRemaining.call(this, edx) };
 
-    debug!(
-        "SkillPlaying::EvalDeathPenaltyUnit: initial={} lost={} remaining={}",
-        initial_gauge,
-        gauge_lost,
-        initial_gauge - gauge_lost
-    );
+    LIFE_REMAINING.store(life_remaining, Ordering::Release);
 
-    result
+    life_remaining
 }
 
 fn hook_user_data_manager_impl_add_play_record(
