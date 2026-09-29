@@ -19,25 +19,25 @@ use crate::updater::self_update;
 
 #[derive(Debug, Snafu)]
 pub enum SaekawaError {
-    #[snafu(display("Could not load configuration"))]
+    #[snafu(display("Could not load configuration: {source:#?}"))]
     ConfigError { source: ConfigLoadError },
 
     #[snafu(display("No cards were configured in the [cards] section. There is nothing to export to. Add tokens under the cards section with the format `\"access_code\" = \"tachi_api_key\"`. If you wish to export scores from all cards, use `default` in place of an access code."))]
     NoCardsError,
 
-    #[snafu(display("An error occured hooking the underlying functions"))]
+    #[snafu(display("An error occured hooking the underlying functions: {source:#?}"))]
     HookError { source: hooks::HookError },
 
     #[snafu(display("The game version specified in project.conf is not a number."))]
     InvalidVersion { source: ParseIntError },
 
-    #[snafu(display("An error occured parsing project.conf"))]
+    #[snafu(display("An error occured parsing project.conf: {source:#?}"))]
     IniError { source: ini::Error },
 
     #[snafu(display("The configured path for failed import exists and is not a directory."))]
     FailedImportNotDir,
 
-    #[snafu(display("Could not create the configured directory for failed imports."))]
+    #[snafu(display("Could not create the configured directory for failed imports: {source:#?}"))]
     FailedCreatingFailedImportDir { source: io::Error },
 }
 
