@@ -64,6 +64,7 @@ static_detour! {
 type SkillIdToClearTypeFn = unsafe extern "fastcall" fn(*const i32, *mut c_void, bool) -> u8;
 type UserDataManagerGetUserDataFn =
     unsafe extern "fastcall" fn(*const UserDataManager) -> *const UserData;
+type UserDataManagerGetClassEmblemFn = unsafe extern "fastcall" fn(*const UserDataManager) -> i32;
 type GetJudgeContextFn = unsafe extern "C" fn() -> *const JudgeContext;
 type JudgeContextGetTrackResultFn =
     unsafe extern "fastcall" fn(*const JudgeContext) -> *const TrackResult;
@@ -72,6 +73,10 @@ type CountGuiltyJudgeTotalFn =
 
 static SKILL_ID_TO_CLEAR_TYPE: OnceLock<SkillIdToClearTypeFn> = OnceLock::new();
 static USER_DATA_MANAGER_GET_USER_DATA: OnceLock<UserDataManagerGetUserDataFn> = OnceLock::new();
+static USER_DATA_MANAGER_GET_CLASS_EMBLEM_BASE: OnceLock<UserDataManagerGetClassEmblemFn> =
+    OnceLock::new();
+static USER_DATA_MANAGER_GET_CLASS_EMBLEM_MEDAL: OnceLock<UserDataManagerGetClassEmblemFn> =
+    OnceLock::new();
 static GET_JUDGE_CONTEXT: OnceLock<GetJudgeContextFn> = OnceLock::new();
 static JUDGE_CONTEXT_GET_TRACK_RESULT: OnceLock<JudgeContextGetTrackResultFn> = OnceLock::new();
 static COUNT_GUILTY_JUDGE_TOTAL: OnceLock<CountGuiltyJudgeTotalFn> = OnceLock::new();
@@ -181,7 +186,7 @@ fn resolve_functions(module_info: &MODULEINFO, scan_mode: ScanMode) -> Result<()
     let address = scan_signature(module_info, scan_mode, "53 B3 ?? 38 5C 24")?;
 
     unsafe {
-        debug!("SkillIdToClearType={:p}", address);
+        debug!("SkillIdToClearType={address:p}");
         SKILL_ID_TO_CLEAR_TYPE.get_or_init(|| mem::transmute::<_, _>(address));
     }
 
@@ -190,6 +195,24 @@ fn resolve_functions(module_info: &MODULEINFO, scan_mode: ScanMode) -> Result<()
     unsafe {
         debug!("UserDataManager::GetUserData={:p}", address);
         USER_DATA_MANAGER_GET_USER_DATA.get_or_init(|| mem::transmute::<_, _>(address));
+    }
+
+    let address = scan_signature(module_info, scan_mode, "E8 ?? ?? ?? ?? 0F 10 45 ?? 89 43")?;
+
+    unsafe {
+        debug!("UserDataManager::GetClassEmblemBase={:p}", address);
+        USER_DATA_MANAGER_GET_CLASS_EMBLEM_BASE.get_or_init(|| mem::transmute::<_, _>(address));
+    }
+
+    let address = scan_signature(
+        module_info,
+        scan_mode,
+        "E8 ?? ?? ?? ?? 8B CF 89 45 ?? E8 ?? ?? ?? ?? 8D 4D",
+    )?;
+
+    unsafe {
+        debug!("UserDataManager::GetClassEmblemMedal={:p}", address);
+        USER_DATA_MANAGER_GET_CLASS_EMBLEM_MEDAL.get_or_init(|| mem::transmute::<_, _>(address));
     }
 
     let address = scan_signature(
@@ -509,12 +532,25 @@ fn hook_user_data_manager_impl_add_play_record(
         error!("Config has not been initialized?");
         return;
     };
+
     let Some(user_data_manager_get_user_data) = USER_DATA_MANAGER_GET_USER_DATA.get() else {
-        error!("UserDataManager::GetUserData was somehow not set at initialization!");
+        error!("UserDataManager::GetUserData was not resolved.");
+        return;
+    };
+    let Some(user_data_manager_get_class_emblem_base) =
+        USER_DATA_MANAGER_GET_CLASS_EMBLEM_BASE.get()
+    else {
+        error!("UserDataManager::GetClassEmblemBase was not resolved.");
+        return;
+    };
+    let Some(user_data_manager_get_class_emblem_medal) =
+        USER_DATA_MANAGER_GET_CLASS_EMBLEM_MEDAL.get()
+    else {
+        error!("UserDataManager::GetClassEmblemMedal was not resolved.");
         return;
     };
     let Some(skill_id_to_clear_type) = SKILL_ID_TO_CLEAR_TYPE.get() else {
-        error!("SkillIdToClearType was somehow not set at initialization!");
+        error!("SkillIdToClearType was not resolved.");
         return;
     };
     let Some(play_records_offset) = USER_DATA_MANAGER_IMPL_PLAY_RECORDS_OFFSET.get() else {
@@ -522,7 +558,7 @@ fn hook_user_data_manager_impl_add_play_record(
         return;
     };
     let Some(judge_context_get_track_result) = JUDGE_CONTEXT_GET_TRACK_RESULT.get() else {
-        error!("JudgeContext::GetTrackResult was somehow not set at initialization!");
+        error!("JudgeContext::GetTrackResult was not resolved.");
         return;
     };
     let score_graph = match SCORE_GRAPH_VALUES.lock() {
@@ -540,16 +576,11 @@ fn hook_user_data_manager_impl_add_play_record(
         }
     };
 
-    let user_data = unsafe {
-        // a bit hacky but who cares unless it blows up in my face down the line
-        // the vtable is just the dtor anyways
-        let udm = UserDataManager {
-            vtable: ptr::null_mut(),
-            implementation: this,
-        };
-
-        user_data_manager_get_user_data(&raw const udm)
+    let udm = UserDataManager {
+        vtable: ptr::null_mut(),
+        implementation: this,
     };
+    let user_data = unsafe { user_data_manager_get_user_data(&raw const udm) };
 
     debug!(
         "UserDataManager::GetUserData(impl={:p})={:p}",
@@ -660,8 +691,14 @@ fn hook_user_data_manager_impl_add_play_record(
         meta: BatchManualMeta::default(),
         scores: vec![tachi_score],
         classes: Some(BatchManualClasses {
-            dan: ClassEmblem::try_from(unsafe { (*user_data).class_emblem_medal }).ok(),
-            emblem: ClassEmblem::try_from(unsafe { (*user_data).class_emblem_base }).ok(),
+            dan: ClassEmblem::try_from(unsafe {
+                user_data_manager_get_class_emblem_medal(&raw const udm)
+            })
+            .ok(),
+            emblem: ClassEmblem::try_from(unsafe {
+                user_data_manager_get_class_emblem_base(&raw const udm)
+            })
+            .ok(),
         }),
     };
 
