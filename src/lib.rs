@@ -5,6 +5,7 @@ mod helpers;
 mod hooks;
 mod logging;
 mod saekawa;
+mod scanner;
 mod score_import;
 mod types;
 mod updater;

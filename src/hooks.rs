@@ -1,7 +1,6 @@
 use std::{
     ffi::c_void,
-    mem::{self, MaybeUninit},
-    ptr,
+    mem, ptr,
     sync::{
         atomic::{AtomicI32, AtomicU64, Ordering},
         Arc, LazyLock, Mutex, OnceLock,
@@ -10,20 +9,14 @@ use std::{
     time::Duration,
 };
 
-use lightningscanner::{ScanMode, Scanner};
 use log::{debug, error, info};
 use retour::static_detour;
 use snafu::Snafu;
-use winapi::um::{
-    errhandlingapi::GetLastError,
-    libloaderapi::GetModuleHandleW,
-    processthreadsapi::GetCurrentProcess,
-    psapi::{GetModuleInformation, MODULEINFO},
-};
 
 use crate::{
     helpers::winapi_ext::perf_counter_ns,
     saekawa::CONFIG,
+    scanner::{Scanner, ScannerError},
     score_import::execute_score_import,
     types::{
         chuni::{
@@ -93,10 +86,10 @@ static LIFE_GRAPH_VALUES: LazyLock<Arc<Mutex<Vec<i32>>>> =
 
 #[derive(Debug, Snafu)]
 pub enum HookError {
-    #[snafu(display("Win32 error: {error}"))]
-    Win32Error { error: u32 },
+    #[snafu(display("Scanner error: {error:#?}"))]
+    ScannerError { error: ScannerError },
 
-    #[snafu(display("Could not find signature in game binary: {signature}"))]
+    #[snafu(display("signature not found: {signature}"))]
     SignatureNotFound { signature: &'static str },
 
     #[snafu(display("An error occured hooking game functions"))]
@@ -104,133 +97,115 @@ pub enum HookError {
 }
 
 pub fn attach_all() -> Result<(), HookError> {
-    let mut module_info: MaybeUninit<MODULEINFO> = MaybeUninit::uninit();
-    let result = unsafe {
-        GetModuleInformation(
-            GetCurrentProcess(),
-            GetModuleHandleW(ptr::null_mut()),
-            module_info.as_mut_ptr(),
-            mem::size_of::<MODULEINFO>() as u32,
-        )
-    };
+    let scanner = Scanner::new().map_err(|error| HookError::ScannerError { error })?;
 
-    if result == 0 {
-        return Err(HookError::Win32Error {
-            error: unsafe { GetLastError() },
-        });
+    macro_rules! attach_hook {
+        ($name:literal, $retour_static:ident, $signature:literal, $detour:ident$(,)?) => {
+            let address = scan_signature(&scanner, $signature)?;
+
+            unsafe {
+                debug!("{}={address:p}", $name);
+                $retour_static
+                    .initialize(mem::transmute::<_, _>(address), $detour)
+                    .map_err(|e| HookError::DetourError { error: e })?;
+            }
+        };
     }
 
-    // TODO: scan a copy of the image instead of the actual image itself
-    // to prevent conflicts with other hooks
-
-    let module_info = unsafe { module_info.assume_init() };
-    let scan_mode = if is_x86_feature_detected!("avx2") {
-        ScanMode::Avx2
-    } else if is_x86_feature_detected!("sse4.2") {
-        ScanMode::Sse42
-    } else {
-        ScanMode::Scalar
-    };
-
-    debug!(
-        "lpBaseOfDll={:p} SizeOfImage={} scan_mode={:?}",
-        module_info.lpBaseOfDll, module_info.SizeOfImage, scan_mode
+    resolve_functions(&scanner)?;
+    attach_hook!(
+        "projGame::PlayMusic::State_Load_initFunc",
+        HookPlayMusicStateLoadInitFunc,
+        "55 8B EC 6A ?? 68 ?? ?? ?? ?? 64 A1 ?? ?? ?? ?? 50 81 EC ?? ?? ?? ?? A1 ?? ?? ?? ?? 33 C5 89 45 ?? 56 57 50 8D 45 ?? 64 A3 ?? ?? ?? ?? 89 8D ?? ?? ?? ?? 8D 89",
+        hook_playmusic_state_load_initfunc,
     );
-
-    resolve_functions(&module_info, scan_mode)?;
-    attach_hook_playmusic_state_load_initfunc(&module_info, scan_mode)?;
-    attach_hook_playmusic_state_play_updatefunc(&module_info, scan_mode)?;
-    attach_hook_get_lost_score(&module_info, scan_mode)?;
-    attach_hook_get_life_remaining(&module_info, scan_mode)?;
-    attach_hook_user_data_manager_impl_add_play_record(&module_info, scan_mode)?;
+    attach_hook!(
+        "projGame::PlayMusic::State_Play_updateFunc",
+        HookPlayMusicStatePlayUpdateFunc,
+        "53 56 57 6A ?? 8B F1 E8 ?? ?? ?? ?? 6A ?? 8B CE E8 ?? ?? ?? ?? 8B 1D",
+        hook_playmusic_state_play_updatefunc,
+    );
+    attach_hook!(
+        "projGame::TrackResult::GetLostScore",
+        HookGetLostScore,
+        "E8 ?? ?? ?? ?? 8B 4F ?? 2B D8",
+        hook_get_lost_score,
+    );
+    attach_hook!(
+        "projGame::JudgeContext::GetLifeRemaining",
+        HookGetLifeRemaining,
+        "E8 ?? ?? ?? ?? 8B F8 8D 4E ?? B8",
+        hook_get_life_remaining,
+    );
+    attach_hook!(
+        "projView::UserDataManager::Impl::AddPlayRecord",
+        HookUserDataManagerImplAddPlayRecord,
+        "55 8D AC 24 ?? ?? ?? ?? 81 EC ?? ?? ?? ?? 6A ?? 68 ?? ?? ?? ?? 64 A1 ?? ?? ?? ?? 50 83 EC ?? A1 ?? ?? ?? ?? 33 C5 89 85 ?? ?? ?? ?? 53 56 57 50 8D 45 ?? 64 A3 ?? ?? ?? ?? 8B F9 89 7D ?? 8B 85 ?? ?? ?? ?? 8B 9D ?? ?? ?? ?? 8B CB",
+        hook_user_data_manager_impl_add_play_record,
+    );
     Ok(())
 }
 
-fn scan_signature(
-    module_info: &MODULEINFO,
-    scan_mode: ScanMode,
-    signature: &'static str,
-) -> Result<*const u8, HookError> {
-    let scanner = Scanner::new(signature);
-    let result = unsafe {
-        scanner.find(
-            Some(scan_mode),
-            module_info.lpBaseOfDll.cast::<_>(),
-            module_info.SizeOfImage as _,
-        )
-    };
-
-    if !result.is_valid() {
-        return Err(HookError::SignatureNotFound { signature });
-    }
-
-    let address = result.get_addr();
-    let b = unsafe { *address };
-
-    if b == 0xE8 || b == 0xE9 {
-        unsafe {
-            let rel = i32::from_le_bytes(
-                std::slice::from_raw_parts(address.byte_add(1), 4)
-                    .try_into()
-                    .expect("std::slice::from_raw_parts with len=4 should convert to [u8; 4]"),
-            );
-
-            Ok(address.add(5).offset(rel as isize))
-        }
-    } else {
-        Ok(address)
-    }
+fn scan_signature(scanner: &Scanner, signature: &'static str) -> Result<*const c_void, HookError> {
+    scanner
+        .scan_text(signature)
+        .ok_or_else(|| HookError::SignatureNotFound { signature })
 }
 
-fn resolve_functions(module_info: &MODULEINFO, scan_mode: ScanMode) -> Result<(), HookError> {
-    let address = scan_signature(module_info, scan_mode, "53 B3 ?? 38 5C 24")?;
+fn resolve_functions(scanner: &Scanner) -> Result<(), HookError> {
+    macro_rules! resolve_function {
+        ($name:literal, $oncelock:ident, $signature:literal$(,)?) => {
+            let address = scan_signature(scanner, $signature)?;
 
-    unsafe {
-        debug!("SkillIdToClearType={address:p}");
-        SKILL_ID_TO_CLEAR_TYPE.get_or_init(|| mem::transmute::<_, _>(address));
+            debug!("{}={address:p}", $name);
+
+            unsafe {
+                $oncelock.get_or_init(|| mem::transmute::<_, _>(address));
+            }
+        };
     }
 
-    let address = scan_signature(module_info, scan_mode, "E8 ?? ?? ?? ?? 89 B0")?;
-
-    unsafe {
-        debug!("UserDataManager::GetUserData={:p}", address);
-        USER_DATA_MANAGER_GET_USER_DATA.get_or_init(|| mem::transmute::<_, _>(address));
-    }
-
-    let address = scan_signature(module_info, scan_mode, "E8 ?? ?? ?? ?? 0F 10 45 ?? 89 43")?;
-
-    unsafe {
-        debug!("UserDataManager::GetClassEmblemBase={:p}", address);
-        USER_DATA_MANAGER_GET_CLASS_EMBLEM_BASE.get_or_init(|| mem::transmute::<_, _>(address));
-    }
-
-    let address = scan_signature(
-        module_info,
-        scan_mode,
+    resolve_function!(
+        "SkillIdToClearType",
+        SKILL_ID_TO_CLEAR_TYPE,
+        "53 B3 ?? 38 5C 24",
+    );
+    resolve_function!(
+        "UserDataManager::GetUserData",
+        USER_DATA_MANAGER_GET_USER_DATA,
+        "E8 ?? ?? ?? ?? 89 B0",
+    );
+    resolve_function!(
+        "UserDataManager::GetClassEmblemBase",
+        USER_DATA_MANAGER_GET_CLASS_EMBLEM_BASE,
+        "E8 ?? ?? ?? ?? 0F 10 45 ?? 89 43",
+    );
+    resolve_function!(
+        "UserDataManager::GetClassEmblemMedal",
+        USER_DATA_MANAGER_GET_CLASS_EMBLEM_MEDAL,
         "E8 ?? ?? ?? ?? 8B CF 89 45 ?? E8 ?? ?? ?? ?? 8D 4D",
-    )?;
-
-    unsafe {
-        debug!("UserDataManager::GetClassEmblemMedal={:p}", address);
-        USER_DATA_MANAGER_GET_CLASS_EMBLEM_MEDAL.get_or_init(|| mem::transmute::<_, _>(address));
-    }
-
-    let address = scan_signature(
-        module_info,
-        scan_mode,
+    );
+    resolve_function!(
+        "GetJudgeContext",
+        GET_JUDGE_CONTEXT,
         "E8 ?? ?? ?? ?? 8D 48 ?? E8 ?? ?? ?? ?? 50 8D 8E",
-    )?;
+    );
+    resolve_function!(
+        "JudgeContext::GetTrackResult",
+        JUDGE_CONTEXT_GET_TRACK_RESULT,
+        "E8 ?? ?? ?? ?? 8B D8 8B CB 89 9D",
+    );
+    resolve_function!(
+        "CountGuiltyJudgeTotal",
+        COUNT_GUILTY_JUDGE_TOTAL,
+        "55 56 57 8B E9 33 F6",
+    );
 
-    unsafe {
-        debug!("GetJudgeContext={:p}", address);
-        GET_JUDGE_CONTEXT.get_or_init(|| mem::transmute::<_, _>(address));
-    }
-
-    let address = scan_signature(module_info, scan_mode, "8D 8B ?? ?? ?? ?? FF 77")?;
+    let address = scan_signature(scanner, "8D 8B ?? ?? ?? ?? FF 77")?;
 
     unsafe {
         let offset = usize::from_le_bytes(
-            std::slice::from_raw_parts(address.byte_add(2), 4)
+            std::slice::from_raw_parts(address.cast::<u8>().byte_add(2), 4)
                 .try_into()
                 .expect("slice::from_raw_parts with len=4 should convert to [u8; 4]"),
         );
@@ -240,163 +215,44 @@ fn resolve_functions(module_info: &MODULEINFO, scan_mode: ScanMode) -> Result<()
         USER_DATA_MANAGER_IMPL_PLAY_RECORDS_OFFSET.get_or_init(|| offset);
     }
 
-    let address = scan_signature(module_info, scan_mode, "E8 ?? ?? ?? ?? 8B D8 8B CB 89 9D")?;
-
-    unsafe {
-        debug!("JudgeContext::GetTrackResult={:p}", address);
-        JUDGE_CONTEXT_GET_TRACK_RESULT.get_or_init(|| mem::transmute::<_, _>(address));
-    }
-
-    let address = scan_signature(module_info, scan_mode, "55 56 57 8B E9 33 F6")?;
-
-    unsafe {
-        debug!("CountGuiltyJudgeTotal={:p}", address);
-        COUNT_GUILTY_JUDGE_TOTAL.get_or_init(|| mem::transmute::<_, _>(address));
-    }
-
-    Ok(())
-}
-
-fn attach_hook_playmusic_state_load_initfunc(
-    module_info: &MODULEINFO,
-    scan_mode: ScanMode,
-) -> Result<(), HookError> {
-    let address = scan_signature(
-        module_info,
-        scan_mode,
-        "55 8B EC 6A ?? 68 ?? ?? ?? ?? 64 A1 ?? ?? ?? ?? 50 81 EC ?? ?? ?? ?? A1 ?? ?? ?? ?? 33 C5 89 45 ?? 56 57 50 8D 45 ?? 64 A3 ?? ?? ?? ?? 89 8D ?? ?? ?? ?? 8D 89"
-    )?;
-
-    unsafe {
-        debug!("projGame::PlayMusic::State_Load_initFunc={:p}", address);
-        HookPlayMusicStateLoadInitFunc
-            .initialize(
-                mem::transmute::<_, _>(address),
-                hook_playmusic_state_load_initfunc,
-            )
-            .map_err(|e| HookError::DetourError { error: e })?;
-    }
-
-    Ok(())
-}
-
-fn attach_hook_playmusic_state_play_updatefunc(
-    module_info: &MODULEINFO,
-    scan_mode: ScanMode,
-) -> Result<(), HookError> {
-    let address = scan_signature(
-        module_info,
-        scan_mode,
-        "53 56 57 6A ?? 8B F1 E8 ?? ?? ?? ?? 6A ?? 8B CE E8 ?? ?? ?? ?? 8B 1D",
-    )?;
-
-    unsafe {
-        debug!("projGame::PlayMusic::State_Play_updateFunc={:p}", address);
-        HookPlayMusicStatePlayUpdateFunc
-            .initialize(
-                mem::transmute::<_, _>(address),
-                hook_playmusic_state_play_updatefunc,
-            )
-            .map_err(|e| HookError::DetourError { error: e })?;
-    }
-
-    Ok(())
-}
-
-fn attach_hook_get_lost_score(
-    module_info: &MODULEINFO,
-    scan_mode: ScanMode,
-) -> Result<(), HookError> {
-    let address = scan_signature(module_info, scan_mode, "E8 ?? ?? ?? ?? 8B 4F ?? 2B D8")?;
-
-    unsafe {
-        debug!("projGame::TrackResult::GetLostScore={:p}", address);
-        HookGetLostScore
-            .initialize(mem::transmute::<_, _>(address), hook_get_lost_score)
-            .map_err(|e| HookError::DetourError { error: e })?;
-    }
-
-    Ok(())
-}
-
-fn attach_hook_get_life_remaining(
-    module_info: &MODULEINFO,
-    scan_mode: ScanMode,
-) -> Result<(), HookError> {
-    let address = scan_signature(module_info, scan_mode, "E8 ?? ?? ?? ?? 8B F8 8D 4E ?? B8")?;
-
-    unsafe {
-        debug!("projGame::JudgeContext::GetLifeRemaining={:p}", address);
-        HookGetLifeRemaining
-            .initialize(mem::transmute::<_, _>(address), hook_get_life_remaining)
-            .map_err(|e| HookError::DetourError { error: e })?;
-    }
-
-    Ok(())
-}
-
-fn attach_hook_user_data_manager_impl_add_play_record(
-    module_info: &MODULEINFO,
-    scan_mode: ScanMode,
-) -> Result<(), HookError> {
-    let address = scan_signature(
-        module_info,
-        scan_mode,
-        "55 8D AC 24 ?? ?? ?? ?? 81 EC ?? ?? ?? ?? 6A ?? 68 ?? ?? ?? ?? 64 A1 ?? ?? ?? ?? 50 83 EC ?? A1 ?? ?? ?? ?? 33 C5 89 85 ?? ?? ?? ?? 53 56 57 50 8D 45 ?? 64 A3 ?? ?? ?? ?? 8B F9 89 7D ?? 8B 85 ?? ?? ?? ?? 8B 9D ?? ?? ?? ?? 8B CB",
-    )?;
-
-    unsafe {
-        debug!("UserDataManager::Impl::AddPlayRecord={:p}", address);
-        HookUserDataManagerImplAddPlayRecord
-            .initialize(
-                mem::transmute::<_, _>(address),
-                hook_user_data_manager_impl_add_play_record,
-            )
-            .map_err(|e| HookError::DetourError { error: e })?;
-    }
-
     Ok(())
 }
 
 pub fn enable_all() -> Result<(), HookError> {
+    macro_rules! enable_hook {
+        ($retour_static:ident) => {
+            $retour_static
+                .enable()
+                .map_err(|e| HookError::DetourError { error: e })?;
+        };
+    }
+
     unsafe {
-        HookPlayMusicStateLoadInitFunc
-            .enable()
-            .map_err(|e| HookError::DetourError { error: e })?;
-        HookPlayMusicStatePlayUpdateFunc
-            .enable()
-            .map_err(|e| HookError::DetourError { error: e })?;
-        HookGetLostScore
-            .enable()
-            .map_err(|e| HookError::DetourError { error: e })?;
-        HookGetLifeRemaining
-            .enable()
-            .map_err(|e| HookError::DetourError { error: e })?;
-        HookUserDataManagerImplAddPlayRecord
-            .enable()
-            .map_err(|e| HookError::DetourError { error: e })?;
+        enable_hook!(HookPlayMusicStateLoadInitFunc);
+        enable_hook!(HookPlayMusicStatePlayUpdateFunc);
+        enable_hook!(HookGetLostScore);
+        enable_hook!(HookGetLifeRemaining);
+        enable_hook!(HookUserDataManagerImplAddPlayRecord);
     }
 
     Ok(())
 }
 
 pub fn disable_all() -> Result<(), HookError> {
+    macro_rules! disable_hook {
+        ($retour_static:ident) => {
+            $retour_static
+                .disable()
+                .map_err(|e| HookError::DetourError { error: e })?;
+        };
+    }
+
     unsafe {
-        HookPlayMusicStateLoadInitFunc
-            .disable()
-            .map_err(|e| HookError::DetourError { error: e })?;
-        HookPlayMusicStatePlayUpdateFunc
-            .disable()
-            .map_err(|e| HookError::DetourError { error: e })?;
-        HookGetLostScore
-            .disable()
-            .map_err(|e| HookError::DetourError { error: e })?;
-        HookGetLifeRemaining
-            .disable()
-            .map_err(|e| HookError::DetourError { error: e })?;
-        HookUserDataManagerImplAddPlayRecord
-            .disable()
-            .map_err(|e| HookError::DetourError { error: e })?;
+        disable_hook!(HookPlayMusicStateLoadInitFunc);
+        disable_hook!(HookPlayMusicStatePlayUpdateFunc);
+        disable_hook!(HookGetLostScore);
+        disable_hook!(HookGetLifeRemaining);
+        disable_hook!(HookUserDataManagerImplAddPlayRecord);
     }
 
     Ok(())
