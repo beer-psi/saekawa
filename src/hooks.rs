@@ -514,9 +514,17 @@ fn hook_user_data_manager_impl_add_play_record(
     let life_graph_data = life_graph.clone();
 
     let tachi_score = BatchManualScore {
-        match_type: MatchType::InGameId,
+        match_type: if difficulty == Difficulty::WorldsEnd {
+            MatchType::GcmInGameIdSpecialChart
+        } else {
+            MatchType::InGameId
+        },
         identifier: play_record.music_id.to_string(),
-        difficulty: Some(difficulty),
+        difficulty: if difficulty == Difficulty::WorldsEnd {
+            None
+        } else {
+            Some(difficulty)
+        },
         score: play_record.score as u32,
         note_lamp,
         clear_lamp,
