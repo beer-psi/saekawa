@@ -37,7 +37,7 @@ use crate::{
 // while thiscall uses ecx, stack.
 
 static_detour! {
-    pub static HookPlayMusicStateLoadInitFunc: unsafe extern "fastcall" fn(
+    pub static HookPlayMusicStatePlayInitFunc: unsafe extern "fastcall" fn(
         *mut c_void, *mut c_void
     );
     pub static HookPlayMusicStatePlayUpdateFunc: unsafe extern "fastcall" fn(
@@ -114,10 +114,10 @@ pub fn attach_all() -> Result<(), HookError> {
 
     resolve_functions(&scanner)?;
     attach_hook!(
-        "projGame::PlayMusic::State_Load_initFunc",
-        HookPlayMusicStateLoadInitFunc,
-        "55 8B EC 6A ?? 68 ?? ?? ?? ?? 64 A1 ?? ?? ?? ?? 50 81 EC ?? ?? ?? ?? A1 ?? ?? ?? ?? 33 C5 89 45 ?? 56 57 50 8D 45 ?? 64 A3 ?? ?? ?? ?? 89 8D ?? ?? ?? ?? 8D 89",
-        hook_playmusic_state_load_initfunc,
+        "projGame::PlayMusic::State_Play_initFunc",
+        HookPlayMusicStatePlayInitFunc,
+        "53 55 56 57 8B D9 6A ?? 68",
+        hook_playmusic_state_play_initfunc,
     );
     attach_hook!(
         "projGame::PlayMusic::State_Play_updateFunc",
@@ -228,7 +228,7 @@ pub fn enable_all() -> Result<(), HookError> {
     }
 
     unsafe {
-        enable_hook!(HookPlayMusicStateLoadInitFunc);
+        enable_hook!(HookPlayMusicStatePlayInitFunc);
         enable_hook!(HookPlayMusicStatePlayUpdateFunc);
         enable_hook!(HookGetLostScore);
         enable_hook!(HookGetLifeRemaining);
@@ -248,7 +248,7 @@ pub fn disable_all() -> Result<(), HookError> {
     }
 
     unsafe {
-        disable_hook!(HookPlayMusicStateLoadInitFunc);
+        disable_hook!(HookPlayMusicStatePlayInitFunc);
         disable_hook!(HookPlayMusicStatePlayUpdateFunc);
         disable_hook!(HookGetLostScore);
         disable_hook!(HookGetLifeRemaining);
@@ -258,12 +258,12 @@ pub fn disable_all() -> Result<(), HookError> {
     Ok(())
 }
 
-fn hook_playmusic_state_load_initfunc(this: *mut c_void, edx: *mut c_void) {
+fn hook_playmusic_state_play_initfunc(this: *mut c_void, edx: *mut c_void) {
     unsafe {
-        HookPlayMusicStateLoadInitFunc.call(this, edx);
+        HookPlayMusicStatePlayInitFunc.call(this, edx);
     }
 
-    debug!("projGame::PlayMusic::State_Load_initFunc called, clearing graph state.");
+    debug!("projGame::PlayMusic::State_Play_initFunc called, clearing graph state.");
 
     let mut score_graph = match SCORE_GRAPH_VALUES.lock() {
         Ok(g) => g,
